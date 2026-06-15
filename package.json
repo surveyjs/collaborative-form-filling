@@ -1,0 +1,21 @@
+{
+  "name": "survey-collaboration",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Real-time collaborative survey filling (SurveyJS + Socket.IO)",
+  "workspaces": [
+    "packages/server",
+    "packages/client"
+  ],
+  "scripts": {
+    "dev": "npm -w server run dev",
+    "build": "npm -w server run build && npm -w client run build",
+    "start": "npm -w server run start",
+    "test": "npm -w server test && npm -w client test",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
