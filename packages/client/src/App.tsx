@@ -47,30 +47,29 @@ function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
     const params = new URLSearchParams(window.location.search);
 
     const model = new Model({
-      showQuestionNumbers: "off",
       completeText: "Join",
       elements: [
         {
           type: "text",
           name: "name",
           title: "Your name",
-          placeholder: "Anonymous",
+          description: "If left empty, you will appear as \"Anonymous\"."
         },
         {
           type: "text",
           name: "room",
-          title: "Room (leave empty to create a new one)",
-          placeholder: "e.g., team-42",
+          title: "Room ID",
+          description: "If empty, a new room will be created.",
+          placeholder: "Example: team-42",
           defaultValue: params.get("room") ?? "",
         },
         {
           type: "comment",
           name: "surveyJson",
-          title: "Survey schema (SurveyJS JSON) — optional",
+          title: "Survey JSON schema",
           description:
-            "Applied only when creating a new room. If empty, the default survey is used.",
-          placeholder:
-            '{"pages":[{"name":"page1","elements":[{"type":"text","name":"q1","title":"Question"}]}]}',
+            "Used only when creating a new room. If omitted, the default survey is used.",
+          placeholder: "Paste a valid SurveyJS JSON schema.",
           rows: 6,
         },
       ],
@@ -130,7 +129,7 @@ function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
     <div style={{ maxWidth: 600, margin: "10vh auto", padding: "0 1rem", fontFamily: "sans-serif" }}>
       <h1>Collaborative Survey</h1>
       <p style={{ color: "#555" }}>
-        Join a room — everyone who enters the same identifier fills out the survey together.
+        Join a room — anyone using the same room identifier will complete the survey together in real time.
       </p>
       <Survey model={survey} />
     </div>
