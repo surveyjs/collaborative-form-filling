@@ -1,6 +1,6 @@
 # Collaborative Form Filling by SurveyJS
 
-A real-time collaborative survey filling service that allows multiple participants to complete the same questionnaire simultaneously (similar to Google Docs for forms).
+A real-time collaborative survey and form filling service that allows multiple participants to complete the same form simultaneously (similar to Google Docs for for document editing).
 
 - **Frontend** &ndash; React + TypeScript + [SurveyJS](https://surveyjs.io/) (`survey-core`, `survey-react-ui`), Vite
 - **Backend** &ndash; Node + Express + Socket.IO
