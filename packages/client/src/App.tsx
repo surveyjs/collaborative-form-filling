@@ -64,38 +64,21 @@ function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
             {
               type: "text",
               name: "room",
-              title: "Room (leave empty to create a new one)",
-              placeholder: "e.g., team-42",
-              defaultValue: presetRoom,
+              title: "Room ID",
+              description: "If empty, a new room will be created.",
+              placeholder: "Example: team-42",
+              defaultValue: params.get("room") ?? "",
             },
             {
               type: "comment",
               name: "surveyJson",
-              title: "Survey schema (SurveyJS JSON) — optional",
+              title: "Survey JSON schema",
               description:
-                "Applied only when creating a new room. If empty, the default survey is used.",
-              placeholder:
-                '{"pages":[{"name":"page1","elements":[{"type":"text","name":"q1","title":"Question"}]}]}',
+                "Used only when creating a new room. If omitted, the default survey is used.",
+              placeholder: "Paste a valid SurveyJS JSON schema.",
               rows: 6,
             },
           ]),
-        {
-          type: "text",
-          name: "room",
-          title: "Room ID",
-          description: "If empty, a new room will be created.",
-          placeholder: "Example: team-42",
-          defaultValue: params.get("room") ?? "",
-        },
-        {
-          type: "comment",
-          name: "surveyJson",
-          title: "Survey JSON schema",
-          description:
-            "Used only when creating a new room. If omitted, the default survey is used.",
-          placeholder: "Paste a valid SurveyJS JSON schema.",
-          rows: 6,
-        },
       ],
     });
 

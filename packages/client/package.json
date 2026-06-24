@@ -13,8 +13,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.1",
-    "survey-core": "3.0.0-beta.6",
-    "survey-react-ui": "3.0.0-beta.6"
+    "survey-core": "3.0.0-beta.7",
+    "survey-react-ui": "3.0.0-beta.7"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
