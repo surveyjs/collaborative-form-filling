@@ -64,17 +64,14 @@ export function CollaborativeSurvey({ socket, roomId, name, surveyJson }: Collab
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
-      <main style={{ flex: 1, padding: "1rem 2rem" }}>
-        <div style={{ marginBottom: 12, color: "#555" }}>
-          Room: <strong data-testid="room-id">{roomId}</strong>
-        </div>
+      <main style={{ flex: 1, padding: "0 0 0 0" }}>
         {survey ? (
           <Survey model={survey} />
         ) : (
           <p>Connecting to the room…</p>
         )}
       </main>
-      <Presence participants={participants} selfId={selfId} />
+      <Presence roomId={roomId} participants={participants} selfId={selfId} />
     </div>
   );
 }

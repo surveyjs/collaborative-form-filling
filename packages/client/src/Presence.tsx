@@ -1,11 +1,32 @@
+import { useState } from "react";
 import type { Participant } from "../../shared/events";
 
 interface PresenceProps {
+  roomId: string;
   participants: Participant[];
   selfId: string | null;
 }
 
-export function Presence({ participants, selfId }: PresenceProps) {
+/** Builds the shareable URL that pre-fills the join form with this room. */
+function joinUrl(roomId: string): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", roomId);
+  return url.toString();
+}
+
+export function Presence({ roomId, participants, selfId }: PresenceProps) {
+  const [copied, setCopied] = useState(false);
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(joinUrl(roomId));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard may be unavailable (e.g. insecure context); ignore.
+    }
+  };
+
   return (
     <aside
       style={{
@@ -15,6 +36,26 @@ export function Presence({ participants, selfId }: PresenceProps) {
         background: "#fafafa",
       }}
     >
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ color: "#555", marginBottom: 8 }}>
+          Room: <strong data-testid="room-id">{roomId}</strong>
+        </div>
+        <button
+          type="button"
+          onClick={copyLink}
+          data-testid="copy-link"
+          style={{
+            width: "100%",
+            padding: "6px 10px",
+            border: "1px solid #ccc",
+            borderRadius: 4,
+            background: "#fff",
+            cursor: "pointer",
+          }}
+        >
+          {copied ? "Copied!" : "Copy join link"}
+        </button>
+      </div>
       <h3 style={{ marginTop: 0 }}>Participants ({participants.length})</h3>
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }} data-testid="participants">
         {participants.map((p) => (
