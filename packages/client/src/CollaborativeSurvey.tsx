@@ -63,8 +63,8 @@ export function CollaborativeSurvey({ socket, roomId, name, surveyJson }: Collab
   }, [socket, roomId, name, surveyJson]);
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh" }}>
-      <main style={{ flex: 1, padding: "0 0 0 0" }}>
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+      <main style={{ flex: 1, padding: "0 0 0 0", overflowY: "auto" }}>
         {survey ? (
           <Survey model={survey} />
         ) : (

@@ -34,6 +34,8 @@ export function Presence({ roomId, participants, selfId }: PresenceProps) {
         padding: "1rem",
         borderLeft: "1px solid #e0e0e0",
         background: "#fafafa",
+        height: "100%",
+        overflowY: "auto",
       }}
     >
       <div style={{ marginBottom: 16 }}>

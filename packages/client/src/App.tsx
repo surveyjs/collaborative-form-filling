@@ -45,6 +45,7 @@ const TESTID_BY_QUESTION: Record<string, string> = {
 function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
   const survey = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
+    const presetRoom = params.get("room") ?? "";
 
     const model = new Model({
       showQuestionNumbers: "off",
@@ -56,23 +57,29 @@ function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
           title: "Your name",
           placeholder: "Anonymous",
         },
-        {
-          type: "text",
-          name: "room",
-          title: "Room (leave empty to create a new one)",
-          placeholder: "e.g., team-42",
-          defaultValue: params.get("room") ?? "",
-        },
-        {
-          type: "comment",
-          name: "surveyJson",
-          title: "Survey schema (SurveyJS JSON) — optional",
-          description:
-            "Applied only when creating a new room. If empty, the default survey is used.",
-          placeholder:
-            '{"pages":[{"name":"page1","elements":[{"type":"text","name":"q1","title":"Question"}]}]}',
-          rows: 6,
-        },
+        // When joining via a shared link the room is fixed, so we hide the
+        // Room and Survey schema inputs (the latter only applies when creating).
+        ...(presetRoom
+          ? []
+          : [
+              {
+                type: "text",
+                name: "room",
+                title: "Room (leave empty to create a new one)",
+                placeholder: "e.g., team-42",
+                defaultValue: presetRoom,
+              },
+              {
+                type: "comment",
+                name: "surveyJson",
+                title: "Survey schema (SurveyJS JSON) — optional",
+                description:
+                  "Applied only when creating a new room. If empty, the default survey is used.",
+                placeholder:
+                  '{"pages":[{"name":"page1","elements":[{"type":"text","name":"q1","title":"Question"}]}]}',
+                rows: 6,
+              },
+            ]),
       ],
     });
 
@@ -112,7 +119,7 @@ function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
 
     model.onComplete.add((sender) => {
       const name = String(sender.getValue("name") ?? "").trim();
-      const room = String(sender.getValue("room") ?? "").trim();
+      const room = (String(sender.getValue("room") ?? "").trim() || presetRoom).trim();
       const trimmedJson = String(sender.getValue("surveyJson") ?? "").trim();
       const surveyJson = trimmedJson ? (JSON.parse(trimmedJson) as object) : undefined;
 
