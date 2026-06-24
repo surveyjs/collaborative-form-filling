@@ -48,38 +48,54 @@ function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
     const presetRoom = params.get("room") ?? "";
 
     const model = new Model({
-      showQuestionNumbers: "off",
       completeText: "Join",
       elements: [
         {
           type: "text",
           name: "name",
           title: "Your name",
-          placeholder: "Anonymous",
+          description: "If left empty, you will appear as \"Anonymous\"."
         },
         // When joining via a shared link the room is fixed, so we hide the
         // Room and Survey schema inputs (the latter only applies when creating).
         ...(presetRoom
           ? []
           : [
-              {
-                type: "text",
-                name: "room",
-                title: "Room (leave empty to create a new one)",
-                placeholder: "e.g., team-42",
-                defaultValue: presetRoom,
-              },
-              {
-                type: "comment",
-                name: "surveyJson",
-                title: "Survey schema (SurveyJS JSON) — optional",
-                description:
-                  "Applied only when creating a new room. If empty, the default survey is used.",
-                placeholder:
-                  '{"pages":[{"name":"page1","elements":[{"type":"text","name":"q1","title":"Question"}]}]}',
-                rows: 6,
-              },
-            ]),
+            {
+              type: "text",
+              name: "room",
+              title: "Room (leave empty to create a new one)",
+              placeholder: "e.g., team-42",
+              defaultValue: presetRoom,
+            },
+            {
+              type: "comment",
+              name: "surveyJson",
+              title: "Survey schema (SurveyJS JSON) — optional",
+              description:
+                "Applied only when creating a new room. If empty, the default survey is used.",
+              placeholder:
+                '{"pages":[{"name":"page1","elements":[{"type":"text","name":"q1","title":"Question"}]}]}',
+              rows: 6,
+            },
+          ]),
+        {
+          type: "text",
+          name: "room",
+          title: "Room ID",
+          description: "If empty, a new room will be created.",
+          placeholder: "Example: team-42",
+          defaultValue: params.get("room") ?? "",
+        },
+        {
+          type: "comment",
+          name: "surveyJson",
+          title: "Survey JSON schema",
+          description:
+            "Used only when creating a new room. If omitted, the default survey is used.",
+          placeholder: "Paste a valid SurveyJS JSON schema.",
+          rows: 6,
+        },
       ],
     });
 
@@ -137,7 +153,7 @@ function JoinForm({ onJoin }: { onJoin: (s: Session) => void }) {
     <div style={{ maxWidth: 600, margin: "10vh auto", padding: "0 1rem", fontFamily: "sans-serif" }}>
       <h1>Collaborative Survey</h1>
       <p style={{ color: "#555" }}>
-        Join a room — everyone who enters the same identifier fills out the survey together.
+        Join a room — anyone using the same room identifier will complete the survey together in real time.
       </p>
       <Survey model={survey} />
     </div>
