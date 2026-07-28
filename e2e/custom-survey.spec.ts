@@ -38,7 +38,9 @@ async function joinRoomWithSchema(
   schema?: object,
 ): Promise<Page> {
   const page = await context.newPage();
-  await page.goto(`/?room=${room}`);
+  // No ?room= in the URL: with a preset room the join form hides the Room and
+  // schema fields, so fill the inputs explicitly.
+  await page.goto("/");
   await page.getByTestId("name-input").fill(name);
   await page.getByTestId("room-input").fill(room);
   if (schema) {
@@ -123,7 +125,7 @@ test("custom schema co-edits and propagates to a second joiner", async ({ browse
 test("the join form rejects malformed survey JSON", async ({ browser }) => {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
-  await page.goto("/?room=e2e-badjson");
+  await page.goto("/");
   await page.getByTestId("name-input").fill("Alice");
   await page.getByTestId("room-input").fill("e2e-badjson");
   await page.getByTestId("survey-json-input").fill("{ not json");
@@ -154,7 +156,7 @@ test("an emptied room is reclaimed and the next creator's schema applies", async
   const SCHEMA_Y = { pages: [{ name: "p1", elements: [{ type: "text", name: "z1" }] }] };
   const ctxB = await browser.newContext();
   const pageB = await ctxB.newPage();
-  await pageB.goto(`/?room=${ROOM}`);
+  await pageB.goto("/");
   await pageB.getByTestId("name-input").fill("Bob");
   await pageB.getByTestId("room-input").fill(ROOM);
   await pageB.getByTestId("survey-json-input").fill(JSON.stringify(SCHEMA_Y));
@@ -191,6 +193,10 @@ test("an expression question recomputes from synced answers on every client", as
   const aA = pageA.getByLabel("a", { exact: true });
   await aA.fill("2");
   await aA.blur();
+  // Wait for a's commit (and the expression re-render it triggers) to settle
+  // before touching b: filling b while the survey re-renders can lose the
+  // uncommitted input value, flaking the test.
+  await expect(pageA.locator('[data-name="sum"]')).toContainText("2");
   const bA = pageA.getByLabel("b", { exact: true });
   await bA.fill("3");
   await bA.blur();

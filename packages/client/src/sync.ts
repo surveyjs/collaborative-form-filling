@@ -8,7 +8,6 @@ import type { ValueChangedPayload } from "../../shared/events";
  */
 export interface SyncSocket {
   emit(event: "value-changed", payload: ValueChangedPayload): void;
-  emit(event: "focus-question", payload: { roomId: string; name: string | null }): void;
   on(event: "value-changed", handler: (payload: ValueChangedPayload) => void): void;
   off(event: "value-changed", handler: (payload: ValueChangedPayload) => void): void;
 }
@@ -31,12 +30,38 @@ export interface AttachSyncOptions {
  *
  * Returns a detach function that removes all listeners.
  */
+/**
+ * Pads a matrixdynamic value with empty row objects up to the question's
+ * current `rowCount`.
+ *
+ * When the last non-empty cell of a matrixdynamic is cleared, survey-core
+ * collapses the value to `[]` while the sender's rows stay on screen
+ * (`isRowChanging` guards its own rowCount). Broadcasting the raw `[]` makes
+ * every OTHER client drop to `rowCount = 0` — their rows vanish. Padding to
+ * the sender's rowCount keeps row counts in sync while still clearing cells.
+ *
+ * Genuine row removal is unaffected: survey-core decrements `rowCount` before
+ * writing the shortened value, so at emit time no padding is needed.
+ */
+function normalizeOutgoingValue(survey: Model, name: string, value: unknown): unknown {
+  const question = survey.getQuestionByValueName(name);
+  if (question?.getType() !== "matrixdynamic") return value;
+  const rowCount = (question as { rowCount: number }).rowCount;
+  const rows = Array.isArray(value) ? [...value] : [];
+  while (rows.length < rowCount) rows.push({});
+  return rows;
+}
+
 export function attachSurveySync({ survey, socket, roomId }: AttachSyncOptions): () => void {
   let applyingRemote = false;
 
   const onLocalChange = (_sender: Model, options: { name: string; value: unknown }) => {
     if (applyingRemote) return;
-    socket.emit("value-changed", { roomId, name: options.name, value: options.value });
+    socket.emit("value-changed", {
+      roomId,
+      name: options.name,
+      value: normalizeOutgoingValue(survey, options.name, options.value),
+    });
   };
 
   const onRemoteChange = (payload: ValueChangedPayload) => {

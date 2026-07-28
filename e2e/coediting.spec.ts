@@ -2,7 +2,9 @@ import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 
 async function joinRoom(context: BrowserContext, name: string, room: string): Promise<Page> {
   const page = await context.newPage();
-  await page.goto(`/?room=${room}`);
+  // No ?room= in the URL: with a preset room the join form hides the Room
+  // field, so fill both inputs explicitly.
+  await page.goto("/");
   await page.getByTestId("name-input").fill(name);
   await page.getByTestId("room-input").fill(room);
   await page.getByTestId("join-button").click();
@@ -109,6 +111,39 @@ test("co-edit a matrixdynamic row on the team page", async ({ browser }) => {
 
   const cellB = pageB.getByRole("table").getByRole("textbox").first();
   await expect(cellB).toHaveValue("Alice");
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test("clearing a matrixdynamic dropdown cell keeps the row for other participants", async ({ browser }) => {
+  const ROOM = "e2e-matrix-clear";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  await nextPage(pageA);
+  await nextPage(pageB);
+  await expect(pageB.getByText("Team members")).toBeVisible();
+
+  // B picks a Role in the only row (first dropdown column) -> A sees it.
+  // Click the dropdown container: an overlay wrapper intercepts pointer
+  // events aimed at the inner combobox input.
+  await pageB.getByRole("table").locator(".sd-dropdown").first().click();
+  await pageB.getByRole("option", { name: "Developer" }).click();
+  await expect(pageA.getByRole("table")).toContainText("Developer");
+
+  // B clears the cell via the dropdown's "x" button. survey-core collapses the
+  // now-empty rows array; without outgoing normalization A received [] and the
+  // whole row vanished (rowCount -> 0).
+  await pageB.getByRole("table").locator(".sd-editor-clean-button").first().click();
+
+  // A's cell empties but the row survives: the Name text cell is still there.
+  await expect(pageA.getByRole("table")).not.toContainText("Developer");
+  await expect(pageA.getByRole("table").getByRole("textbox").first()).toBeVisible();
+  // B keeps their row too, and the cleared state converges on both sides.
+  await expect(pageB.getByRole("table").getByRole("textbox").first()).toBeVisible();
 
   await ctxA.close();
   await ctxB.close();

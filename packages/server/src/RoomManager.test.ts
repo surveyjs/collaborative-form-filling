@@ -70,4 +70,34 @@ describe("RoomManager", () => {
     const rm = new RoomManager();
     expect(rm.leave("ghost")).toBeNull();
   });
+
+  it("stores and clears a participant's focus", () => {
+    const rm = new RoomManager();
+    rm.join("r1", "sock-1", "Alice");
+
+    rm.setFocus("r1", "sock-1", "projectName");
+    expect(rm.listParticipants("r1")[0].focus).toBe("projectName");
+
+    rm.setFocus("r1", "sock-1", null);
+    expect(rm.listParticipants("r1")[0].focus).toBeNull();
+  });
+
+  it("ignores setFocus for unknown rooms and participants", () => {
+    const rm = new RoomManager();
+    expect(() => rm.setFocus("ghost-room", "sock-1", "q1")).not.toThrow();
+
+    rm.join("r1", "sock-1", "Alice");
+    rm.setFocus("r1", "ghost-sock", "q1");
+    expect(rm.listParticipants("r1")[0].focus).toBeUndefined();
+  });
+
+  it("drops focus together with the participant on leave", () => {
+    const rm = new RoomManager();
+    rm.join("r1", "sock-1", "Alice");
+    rm.join("r1", "sock-2", "Bob");
+    rm.setFocus("r1", "sock-1", "projectName");
+
+    rm.leave("sock-1");
+    expect(rm.listParticipants("r1").some((p) => p.focus === "projectName")).toBe(false);
+  });
 });

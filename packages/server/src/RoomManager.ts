@@ -88,6 +88,16 @@ export class RoomManager {
     room.data[name] = value;
   }
 
+  /**
+   * Records which question a participant is currently focused on (null on
+   * blur), so late joiners receive it in the `room-state` participant list.
+   * No-op when the room or participant is unknown.
+   */
+  setFocus(roomId: string, socketId: string, name: string | null): void {
+    const participant = this.rooms.get(roomId)?.participants.get(socketId);
+    if (participant) participant.focus = name;
+  }
+
   listParticipants(roomId: string): Participant[] {
     const room = this.rooms.get(roomId);
     return room ? [...room.participants.values()] : [];

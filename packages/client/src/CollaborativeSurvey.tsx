@@ -9,6 +9,7 @@ import type {
 } from "../../shared/events";
 import type { AppSocket } from "./socket";
 import { attachSurveySync } from "./sync";
+import { attachPresence } from "./presenceSync";
 import { Presence } from "./Presence";
 
 interface CollaborativeSurveyProps {
@@ -24,8 +25,17 @@ export function CollaborativeSurvey({ socket, roomId, name, surveyJson }: Collab
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [selfId, setSelfId] = useState<string | null>(null);
   const detachRef = useRef<(() => void) | null>(null);
+  const detachPresenceRef = useRef<(() => void) | null>(null);
+  // Live roster mirror so presence can resolve peer name/color without
+  // re-attaching on every participants state change.
+  const participantsRef = useRef<Participant[]>([]);
 
   useEffect(() => {
+    const updateParticipants = (updater: (prev: Participant[]) => Participant[]) => {
+      participantsRef.current = updater(participantsRef.current);
+      setParticipants(participantsRef.current);
+    };
+
     const onRoomState = (state: RoomStatePayload) => {
       const model = new Model(state.surveyJson);
       model.data = state.data;
@@ -33,19 +43,28 @@ export function CollaborativeSurvey({ socket, roomId, name, surveyJson }: Collab
       // Tear down any previous sync (e.g. on reconnect) before re-attaching.
       detachRef.current?.();
       detachRef.current = attachSurveySync({ survey: model, socket, roomId });
+      detachPresenceRef.current?.();
+      detachPresenceRef.current = attachPresence({
+        survey: model,
+        socket,
+        roomId,
+        selfId: state.selfId,
+        initialParticipants: state.participants,
+        getParticipant: (id) => participantsRef.current.find((p) => p.id === id),
+      });
 
       setSelfId(state.selfId);
-      setParticipants(state.participants);
+      updateParticipants(() => state.participants);
       setSurvey(model);
     };
 
     const onJoined = ({ participant }: { participant: Participant }) =>
-      setParticipants((prev) =>
+      updateParticipants((prev) =>
         prev.some((p) => p.id === participant.id) ? prev : [...prev, participant],
       );
 
     const onLeft = ({ id }: { id: string }) =>
-      setParticipants((prev) => prev.filter((p) => p.id !== id));
+      updateParticipants((prev) => prev.filter((p) => p.id !== id));
 
     socket.on("room-state", onRoomState);
     socket.on("participant-joined", onJoined);
@@ -59,6 +78,8 @@ export function CollaborativeSurvey({ socket, roomId, name, surveyJson }: Collab
       socket.off("participant-left", onLeft);
       detachRef.current?.();
       detachRef.current = null;
+      detachPresenceRef.current?.();
+      detachPresenceRef.current = null;
     };
   }, [socket, roomId, name, surveyJson]);
 

@@ -15,6 +15,12 @@ A real-time collaborative survey and form filling service that allows multiple p
 - An `applyingRemote` flag prevents update loops (see [`packages/client/src/sync.ts`](packages/client/src/sync.ts)).
 - Conflicts are resolved using a last-write-wins strategy at the individual question level.
 
+### Presence
+
+- Each participant's **currently focused question** is broadcast (`focus-question`) and shown to others as a colored ring with a name badge around the question. The focus is stored per participant on the server, so late joiners see it immediately.
+- Each participant's **mouse cursor** is broadcast (`cursor-moved`) as a colored arrow with a name label. Positions are anchored to the hovered question (fractions of its bounding box), so cursors line up across differently sized windows. Cursor packets are ephemeral: throttled on the client, relayed as volatile, and never stored.
+- See [`packages/client/src/presenceSync.ts`](packages/client/src/presenceSync.ts) for capture and rendering details.
+
 ## Server Setup
 
 - The Express server hosts both the client application and Socket.IO on a single port in both development and production.
@@ -70,6 +76,7 @@ npm run test:e2e:install
 - [`packages/server/src/RoomManager.ts`](packages/server/src/RoomManager.ts) &ndash; In-memory room state and conflict resolution.
 - [`packages/client/src/CollaborativeSurvey.tsx`](packages/client/src/CollaborativeSurvey.tsx) &ndash; Room management and survey rendering.
 - [`packages/client/src/sync.ts`](packages/client/src/sync.ts) &ndash; SurveyJS &harr; Socket.IO synchronization.
+- [`packages/client/src/presenceSync.ts`](packages/client/src/presenceSync.ts) &ndash; Focused-question and cursor presence (capture, broadcast, overlay rendering).
 
 <!-- ## License -->
 

@@ -58,7 +58,15 @@ io.on("connection", (socket) => {
   });
 
   socket.on("focus-question", ({ roomId, name }) => {
+    rooms.setFocus(roomId, socket.id, name);
     socket.to(roomId).emit("focus-question", { id: socket.id, name });
+  });
+
+  // Cursor positions are ephemeral: relayed but never stored, and sent as
+  // volatile so packets are dropped (not queued) for congested clients —
+  // every message carries a full position, so loss is harmless.
+  socket.on("cursor-moved", ({ roomId, name, x, y }) => {
+    socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, x, y });
   });
 
   socket.on("disconnect", () => {

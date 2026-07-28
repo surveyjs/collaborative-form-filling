@@ -10,6 +10,12 @@ export interface Participant {
   name: string;
   /** hex color assigned for presence display */
   color: string;
+  /**
+   * Question name this participant is currently editing, or null/absent when
+   * not focused anywhere. Presence data, not identity — kept here so late
+   * joiners receive it via the existing `room-state` participant list.
+   */
+  focus?: string | null;
 }
 
 /** Survey answers keyed by question name (SurveyJS `survey.data`). */
@@ -40,6 +46,18 @@ export interface FocusPayload {
   name: string | null;
 }
 
+export interface CursorPayload {
+  roomId: string;
+  /**
+   * Top-level question name the pointer is over, or null to hide the cursor
+   * (pointer left the survey area or is not over any question).
+   */
+  name: string | null;
+  /** Fraction 0..1 of the pointer position within the question's border box. */
+  x: number;
+  y: number;
+}
+
 // ---- Server -> Client payloads ----
 
 export interface RoomStatePayload {
@@ -65,11 +83,22 @@ export interface FocusBroadcastPayload {
   name: string | null;
 }
 
+export interface CursorBroadcastPayload {
+  /** participant whose cursor moved */
+  id: string;
+  /** top-level question name the cursor is over, or null when hidden */
+  name: string | null;
+  /** fraction 0..1 within the question's border box */
+  x: number;
+  y: number;
+}
+
 /** Events the client sends to the server. */
 export interface ClientToServerEvents {
   "join-room": (payload: JoinRoomPayload) => void;
   "value-changed": (payload: ValueChangedPayload) => void;
   "focus-question": (payload: FocusPayload) => void;
+  "cursor-moved": (payload: CursorPayload) => void;
 }
 
 /** Events the server sends to clients. */
@@ -79,4 +108,5 @@ export interface ServerToClientEvents {
   "participant-joined": (payload: ParticipantJoinedPayload) => void;
   "participant-left": (payload: ParticipantLeftPayload) => void;
   "focus-question": (payload: FocusBroadcastPayload) => void;
+  "cursor-moved": (payload: CursorBroadcastPayload) => void;
 }

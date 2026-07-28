@@ -4,6 +4,8 @@ import { Server } from "socket.io";
 import { io as ioc, type Socket as ClientSocket } from "socket.io-client";
 import type {
   ClientToServerEvents,
+  CursorBroadcastPayload,
+  FocusBroadcastPayload,
   RoomStatePayload,
   ServerToClientEvents,
   ValueChangedPayload,
@@ -34,6 +36,14 @@ function startServer(): Promise<{ http: HttpServer; port: number }> {
     socket.on("value-changed", ({ roomId, name, value }) => {
       rooms.setValue(roomId, name, value);
       socket.to(roomId).emit("value-changed", { roomId, name, value });
+    });
+    // Mirrors the presence wiring in index.ts — keep the two in sync.
+    socket.on("focus-question", ({ roomId, name }) => {
+      rooms.setFocus(roomId, socket.id, name);
+      socket.to(roomId).emit("focus-question", { id: socket.id, name });
+    });
+    socket.on("cursor-moved", ({ roomId, name, x, y }) => {
+      socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, x, y });
     });
     socket.on("disconnect", () => {
       const left = rooms.leave(socket.id);
@@ -99,6 +109,72 @@ describe("socket handlers", () => {
 
     const payload = await received;
     expect(payload).toMatchObject({ name: "projectName", value: "Apollo" });
+    expect(echoed).toBe(false);
+
+    a.close();
+    b.close();
+  });
+
+  it("relays focus-question to others with the sender id, without echo", async () => {
+    const a = connect(port);
+    const b = connect(port);
+    a.emit("join-room", { roomId: "r1", name: "Alice" });
+    const stateA = await once<RoomStatePayload>(a, "room-state");
+    b.emit("join-room", { roomId: "r1", name: "Bob" });
+    await once(b, "room-state");
+
+    let echoed = false;
+    a.on("focus-question", () => {
+      echoed = true;
+    });
+
+    const received = once<FocusBroadcastPayload>(b, "focus-question");
+    a.emit("focus-question", { roomId: "r1", name: "projectName" });
+
+    const payload = await received;
+    expect(payload).toEqual({ id: stateA.selfId, name: "projectName" });
+    expect(echoed).toBe(false);
+
+    a.close();
+    b.close();
+  });
+
+  it("exposes stored focus to late joiners via room-state", async () => {
+    const a = connect(port);
+    a.emit("join-room", { roomId: "r1", name: "Alice" });
+    const stateA = await once<RoomStatePayload>(a, "room-state");
+    a.emit("focus-question", { roomId: "r1", name: "projectName" });
+
+    // Join a second participant after the focus was stored.
+    const b = connect(port);
+    b.emit("join-room", { roomId: "r1", name: "Bob" });
+    const stateB = await once<RoomStatePayload>(b, "room-state");
+
+    const alice = stateB.participants.find((p) => p.id === stateA.selfId);
+    expect(alice?.focus).toBe("projectName");
+
+    a.close();
+    b.close();
+  });
+
+  it("relays cursor-moved to others with the sender id, without echo", async () => {
+    const a = connect(port);
+    const b = connect(port);
+    a.emit("join-room", { roomId: "r1", name: "Alice" });
+    const stateA = await once<RoomStatePayload>(a, "room-state");
+    b.emit("join-room", { roomId: "r1", name: "Bob" });
+    await once(b, "room-state");
+
+    let echoed = false;
+    a.on("cursor-moved", () => {
+      echoed = true;
+    });
+
+    const received = once<CursorBroadcastPayload>(b, "cursor-moved");
+    a.emit("cursor-moved", { roomId: "r1", name: "projectName", x: 0.25, y: 0.75 });
+
+    const payload = await received;
+    expect(payload).toEqual({ id: stateA.selfId, name: "projectName", x: 0.25, y: 0.75 });
     expect(echoed).toBe(false);
 
     a.close();
