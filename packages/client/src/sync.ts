@@ -1,4 +1,4 @@
-import type { Model } from "survey-core";
+import type { Model, QuestionMatrixDynamicModel } from "survey-core";
 import type { ValueChangedPayload } from "../../shared/events";
 
 /**
@@ -46,7 +46,7 @@ export interface AttachSyncOptions {
 function normalizeOutgoingValue(survey: Model, name: string, value: unknown): unknown {
   const question = survey.getQuestionByValueName(name);
   if (question?.getType() !== "matrixdynamic") return value;
-  const rowCount = (question as { rowCount: number }).rowCount;
+  const rowCount = (question as QuestionMatrixDynamicModel).rowCount;
   const rows = Array.isArray(value) ? [...value] : [];
   while (rows.length < rowCount) rows.push({});
   return rows;
