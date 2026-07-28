@@ -16,6 +16,8 @@ export const BLUR_DEBOUNCE_MS = 300;
 export const FALLBACK_TICK_MS = 500;
 /** Remote cursors fade out after this much time without movement. */
 export const CURSOR_IDLE_MS = 30_000;
+/** Gap between the focus ring (2px box-shadow) and the name badge above it. */
+const BADGE_GAP_PX = 6;
 
 /**
  * Minimal transport surface presence needs. The real socket.io-client `Socket`
@@ -200,7 +202,7 @@ export function attachPresence({
         const rect = badgeNode.getBoundingClientRect();
         a.badge.textContent = participant.name;
         a.badge.style.background = participant.color;
-        place(a.badge, rect.right, rect.top);
+        place(a.badge, rect.right, rect.top - BADGE_GAP_PX);
         a.badge.style.transform = "translate(-100%, -100%)";
       } else {
         hide(a.badge);
