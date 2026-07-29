@@ -18,8 +18,8 @@
     "@angular/router": "~12.2.0",
     "rxjs": "~6.6.0",
     "socket.io-client": "^4.8.1",
-    "survey-angular-ui": "file:../../../survey-library/packages/survey-angular-ui/build",
-    "survey-core": "file:../../../survey-library/packages/survey-core/build",
+    "survey-angular-ui": "next",
+    "survey-core": "next",
     "tslib": "^2.3.0",
     "zone.js": "~0.11.4"
   },

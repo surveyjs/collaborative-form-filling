@@ -16,6 +16,12 @@ export interface Participant {
    * joiners receive it via the existing `room-state` participant list.
    */
   focus?: string | null;
+  /**
+   * Survey page this participant is currently on (page name, or "#<index>"
+   * for unnamed pages), or null/absent when unknown. Presence data — kept
+   * here so late joiners receive it via `room-state`, like `focus`.
+   */
+  page?: string | null;
 }
 
 /** Survey answers keyed by question name (SurveyJS `survey.data`). */
@@ -43,6 +49,12 @@ export interface ValueChangedPayload {
 export interface FocusPayload {
   roomId: string;
   /** SurveyJS question name being focused/blurred, or null on blur */
+  name: string | null;
+}
+
+export interface PagePayload {
+  roomId: string;
+  /** Page the sender is on (see `Participant.page`), or null when unknown. */
   name: string | null;
 }
 
@@ -83,6 +95,13 @@ export interface FocusBroadcastPayload {
   name: string | null;
 }
 
+export interface PageBroadcastPayload {
+  /** participant whose page changed */
+  id: string;
+  /** page the participant is on (see `Participant.page`), or null */
+  name: string | null;
+}
+
 export interface CursorBroadcastPayload {
   /** participant whose cursor moved */
   id: string;
@@ -98,6 +117,7 @@ export interface ClientToServerEvents {
   "join-room": (payload: JoinRoomPayload) => void;
   "value-changed": (payload: ValueChangedPayload) => void;
   "focus-question": (payload: FocusPayload) => void;
+  "page-changed": (payload: PagePayload) => void;
   "cursor-moved": (payload: CursorPayload) => void;
 }
 
@@ -108,5 +128,6 @@ export interface ServerToClientEvents {
   "participant-joined": (payload: ParticipantJoinedPayload) => void;
   "participant-left": (payload: ParticipantLeftPayload) => void;
   "focus-question": (payload: FocusBroadcastPayload) => void;
+  "page-changed": (payload: PageBroadcastPayload) => void;
   "cursor-moved": (payload: CursorBroadcastPayload) => void;
 }

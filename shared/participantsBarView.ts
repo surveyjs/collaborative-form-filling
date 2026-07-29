@@ -87,9 +87,26 @@ export function createParticipantsBarView(deps: IParticipantsBarViewDeps): new (
       return this.props.model;
     }
     private renderChip(chip: IBarChip, index: number): any {
+      const model = this.model;
+      const clickable = model.chipsClickable;
       return h(
         "div",
-        { role: "listitem", key: chip.id, title: chip.title, style: { display: "inline-flex" } },
+        {
+          role: "listitem",
+          key: chip.id,
+          title: chip.title,
+          style: { display: "inline-flex", cursor: clickable ? "pointer" : "default" },
+          tabIndex: clickable ? 0 : undefined,
+          onClick: clickable ? () => model.chipClick(chip.id) : undefined,
+          onKeyDown: clickable
+            ? (ev: KeyboardEvent) => {
+              if (ev.key === "Enter" || ev.key === " ") {
+                ev.preventDefault();
+                model.chipClick(chip.id);
+              }
+            }
+            : undefined,
+        },
         h("span", { style: chipCircleStyle(chip.color, index + 1) }, chip.initials),
         h("span", { style: visuallyHidden }, chip.title)
       );

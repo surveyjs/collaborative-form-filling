@@ -18,6 +18,12 @@ export interface IParticipantsBarOptions {
   roomId?: string;
   selfId?: string;
   getInviteLink?: () => string;
+  /**
+   * Called with the participant id when their chip is clicked (typically to
+   * jump to that participant's location in the survey); omitted -> chips are
+   * not interactive.
+   */
+  onChipClick?: (id: string) => void;
 }
 
 export function presenceInitials(name: string): string {
@@ -61,6 +67,8 @@ export class ParticipantsBarModel extends Base {
   public setParticipants(list: Array<IBarParticipant>): void {
     // Roster pushes may arrive on every presence tick; skip the update when
     // nothing the bar displays changed (order included: avatars stack).
+    // NOTE: if the bar ever displays a presence field (e.g. the peer's page),
+    // that field must be added to this signature or its updates are dropped.
     const sig = list.map((u) => [u.id, u.name, u.color].join("\u0001")).join("\u0002");
     if (sig === this.lastParticipantsSig) return;
     this.lastParticipantsSig = sig;
@@ -93,6 +101,13 @@ export class ParticipantsBarModel extends Base {
   }
   public get showInvite(): boolean {
     return !!this.options.getInviteLink;
+  }
+  /** Views use this for pointer cursor / keyboard affordances on chips. */
+  public get chipsClickable(): boolean {
+    return !!this.options.onChipClick;
+  }
+  public chipClick(id: string): void {
+    this.options.onChipClick?.(id);
   }
   public get inviteCopied(): boolean {
     return this.getPropertyValue("inviteCopied", false);

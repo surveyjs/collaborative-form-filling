@@ -3,7 +3,10 @@ import { Model } from "survey-core";
 import {
   attachPresence,
   BLUR_DEBOUNCE_MS,
+  CURSOR_IDLE_MS,
   MOUSE_THROTTLE_MS,
+  pageKey,
+  resolvePage,
   type PresenceSocket,
 } from "../../../shared/presenceSync";
 import type { Participant } from "../../../shared/events";
@@ -78,7 +81,7 @@ function setupDom() {
 function attach(overrides: Partial<Parameters<typeof attachPresence>[0]> = {}) {
   const survey = new Model(SURVEY_JSON);
   const mock = makeMockSocket();
-  const detach = attachPresence({
+  const handle = attachPresence({
     survey,
     socket: mock.socket,
     roomId: "r1",
@@ -87,7 +90,7 @@ function attach(overrides: Partial<Parameters<typeof attachPresence>[0]> = {}) {
     getParticipant: (id) => PEERS.find((p) => p.id === id),
     ...overrides,
   });
-  return { survey, detach, ...mock };
+  return { survey, detach: handle.detach, goToParticipant: handle.goToParticipant, ...mock };
 }
 
 describe("attachPresence", () => {
@@ -306,15 +309,191 @@ describe("attachPresence", () => {
           .hasAttribute("data-collab-focus"),
       ).toBe(false);
 
-      // No further emits after detach.
+      // No further emits after detach (attach itself announced the page).
+      emit.mockClear();
       survey.onFocusInQuestion.fire(survey, {
         question: survey.getQuestionByName("owner"),
       } as never);
+      survey.currentPage = survey.pages[0];
       document
         .querySelector('[data-name="projectName"]')!
         .dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 200, clientY: 250 }));
       vi.advanceTimersByTime(MOUSE_THROTTLE_MS * 2);
       expect(emit).not.toHaveBeenCalled();
+    });
+  });
+
+  const MULTIPAGE_JSON = {
+    pages: [
+      {
+        name: "overview",
+        elements: [
+          { type: "text", name: "projectName" },
+          { type: "text", name: "owner" },
+        ],
+      },
+      {
+        name: "team",
+        elements: [
+          { type: "text", name: "members" },
+          { type: "text", name: "secret", visible: false },
+        ],
+      },
+    ],
+  };
+
+  function attachMultipage(overrides: Partial<Parameters<typeof attachPresence>[0]> = {}) {
+    const survey = new Model(MULTIPAGE_JSON);
+    const mock = makeMockSocket();
+    const handle = attachPresence({
+      survey,
+      socket: mock.socket,
+      roomId: "r1",
+      selfId: "self-id",
+      initialParticipants: PEERS,
+      getParticipant: (id) => PEERS.find((p) => p.id === id),
+      ...overrides,
+    });
+    return { survey, detach: handle.detach, goToParticipant: handle.goToParticipant, ...mock };
+  }
+
+  /** Adds a question node for the second page and spies on its scroll. */
+  function addMembersNode() {
+    const node = document.createElement("div");
+    node.setAttribute("data-name", "members");
+    document.querySelector("main")!.appendChild(node);
+    const scrollIntoView = vi.fn();
+    node.scrollIntoView = scrollIntoView; // jsdom lacks a runtime implementation
+    return { node, scrollIntoView };
+  }
+
+  describe("outgoing page", () => {
+    it("announces the initial page on attach and page changes after, deduped", () => {
+      const { survey, emit } = attachMultipage();
+
+      expect(emitsOf(emit, "page-changed")).toEqual([{ roomId: "r1", name: "overview" }]);
+
+      survey.currentPage = survey.getPageByName("team");
+      survey.currentPage = survey.getPageByName("team");
+
+      expect(emitsOf(emit, "page-changed")).toEqual([
+        { roomId: "r1", name: "overview" },
+        { roomId: "r1", name: "team" },
+      ]);
+    });
+  });
+
+  describe("pageKey / resolvePage", () => {
+    it("round-trips every page and resolves #index keys", () => {
+      const survey = new Model(MULTIPAGE_JSON);
+      for (const page of survey.pages) {
+        expect(resolvePage(survey, pageKey(survey, page))).toBe(page);
+      }
+      expect(resolvePage(survey, "#1")).toBe(survey.pages[1]);
+      expect(resolvePage(survey, "ghost")).toBeNull();
+      expect(resolvePage(survey, "#42")).toBeNull();
+    });
+  });
+
+  describe("goToParticipant", () => {
+    it("switches to the page of the peer's focused question and scrolls to it", () => {
+      const { survey, receive, goToParticipant } = attachMultipage();
+      const { scrollIntoView } = addMembersNode();
+      receive("focus-question", { id: "peer-1", name: "members" });
+
+      goToParticipant("peer-1");
+
+      expect(survey.currentPage.name).toBe("team");
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    });
+
+    it("falls back to the question under the peer's fresh cursor without focus", () => {
+      const { survey, receive, goToParticipant } = attachMultipage();
+      const { scrollIntoView } = addMembersNode();
+      receive("cursor-moved", { id: "peer-1", name: "members", x: 0.5, y: 0.5 });
+
+      goToParticipant("peer-1");
+
+      expect(survey.currentPage.name).toBe("team");
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
+
+    it("ignores a stale cursor and switches to the peer's page without scrolling", () => {
+      const { survey, receive, goToParticipant } = attachMultipage();
+      const { scrollIntoView } = addMembersNode();
+      receive("cursor-moved", { id: "peer-1", name: "members", x: 0.5, y: 0.5 });
+      receive("page-changed", { id: "peer-1", name: "team" });
+      vi.advanceTimersByTime(CURSOR_IDLE_MS + 1000);
+
+      goToParticipant("peer-1");
+
+      expect(survey.currentPage.name).toBe("team");
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the peer's page when their focused question is hidden", () => {
+      const { survey, receive, goToParticipant } = attachMultipage();
+      receive("focus-question", { id: "peer-1", name: "secret" }); // visible: false
+      receive("page-changed", { id: "peer-1", name: "team" });
+
+      goToParticipant("peer-1");
+
+      expect(survey.currentPage.name).toBe("team");
+    });
+
+    it("uses the page seeded from initialParticipants (late join)", () => {
+      const { survey, goToParticipant } = attachMultipage({
+        initialParticipants: [PEERS[0], { ...PEERS[1], page: "team" }],
+      });
+
+      goToParticipant("peer-1");
+
+      expect(survey.currentPage.name).toBe("team");
+    });
+
+    it("is a no-op for unknown peers and peers without any location", () => {
+      const { survey, receive, goToParticipant } = attachMultipage();
+      receive("focus-question", { id: "peer-1", name: null });
+
+      expect(() => goToParticipant("ghost")).not.toThrow();
+      expect(() => goToParticipant("peer-1")).not.toThrow();
+      expect(survey.currentPage.name).toBe("overview");
+    });
+
+    it("force-renders the target row on lazy-rendering surveys", () => {
+      const survey = new Model(MULTIPAGE_JSON);
+      survey.lazyRenderEnabled = true;
+      const { receive, goToParticipant } = attachMultipage({ survey });
+      const page = survey.getPageByName("team")!;
+      const forceRender = vi.spyOn(page, "forceRenderElement");
+      receive("focus-question", { id: "peer-1", name: "members" });
+
+      goToParticipant("peer-1");
+
+      expect(survey.currentPage.name).toBe("team");
+      expect(forceRender).toHaveBeenCalledWith(survey.getQuestionByName("members"));
+    });
+
+    it("keeps polling for the question node until the page has rendered", () => {
+      // Force the raf helper onto its setTimeout fallback (fake timers don't
+      // drive jsdom's real requestAnimationFrame).
+      vi.stubGlobal("requestAnimationFrame", undefined);
+      try {
+        const { survey, receive, goToParticipant } = attachMultipage();
+        receive("focus-question", { id: "peer-1", name: "members" });
+
+        goToParticipant("peer-1");
+        expect(survey.currentPage.name).toBe("team");
+
+        // Node appears a couple of ticks later, as after a real page re-render.
+        vi.advanceTimersByTime(40);
+        const { scrollIntoView } = addMembersNode();
+        vi.advanceTimersByTime(40);
+
+        expect(scrollIntoView).toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 });

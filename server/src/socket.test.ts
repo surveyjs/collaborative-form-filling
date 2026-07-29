@@ -6,6 +6,7 @@ import type {
   ClientToServerEvents,
   CursorBroadcastPayload,
   FocusBroadcastPayload,
+  PageBroadcastPayload,
   RoomStatePayload,
   ServerToClientEvents,
   ValueChangedPayload,
@@ -41,6 +42,10 @@ function startServer(): Promise<{ http: HttpServer; port: number }> {
     socket.on("focus-question", ({ roomId, name }) => {
       rooms.setFocus(roomId, socket.id, name);
       socket.to(roomId).emit("focus-question", { id: socket.id, name });
+    });
+    socket.on("page-changed", ({ roomId, name }) => {
+      rooms.setPage(roomId, socket.id, name);
+      socket.to(roomId).emit("page-changed", { id: socket.id, name });
     });
     socket.on("cursor-moved", ({ roomId, name, x, y }) => {
       socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, x, y });
@@ -152,6 +157,48 @@ describe("socket handlers", () => {
 
     const alice = stateB.participants.find((p) => p.id === stateA.selfId);
     expect(alice?.focus).toBe("projectName");
+
+    a.close();
+    b.close();
+  });
+
+  it("relays page-changed to others with the sender id, without echo", async () => {
+    const a = connect(port);
+    const b = connect(port);
+    a.emit("join-room", { roomId: "r1", name: "Alice" });
+    const stateA = await once<RoomStatePayload>(a, "room-state");
+    b.emit("join-room", { roomId: "r1", name: "Bob" });
+    await once(b, "room-state");
+
+    let echoed = false;
+    a.on("page-changed", () => {
+      echoed = true;
+    });
+
+    const received = once<PageBroadcastPayload>(b, "page-changed");
+    a.emit("page-changed", { roomId: "r1", name: "team" });
+
+    const payload = await received;
+    expect(payload).toEqual({ id: stateA.selfId, name: "team" });
+    expect(echoed).toBe(false);
+
+    a.close();
+    b.close();
+  });
+
+  it("exposes stored page to late joiners via room-state", async () => {
+    const a = connect(port);
+    a.emit("join-room", { roomId: "r1", name: "Alice" });
+    const stateA = await once<RoomStatePayload>(a, "room-state");
+    a.emit("page-changed", { roomId: "r1", name: "team" });
+
+    // Join a second participant after the page was stored.
+    const b = connect(port);
+    b.emit("join-room", { roomId: "r1", name: "Bob" });
+    const stateB = await once<RoomStatePayload>(b, "room-state");
+
+    const alice = stateB.participants.find((p) => p.id === stateA.selfId);
+    expect(alice?.page).toBe("team");
 
     a.close();
     b.close();

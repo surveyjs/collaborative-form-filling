@@ -98,6 +98,16 @@ export class RoomManager {
     if (participant) participant.focus = name;
   }
 
+  /**
+   * Records which survey page a participant is currently on, so late joiners
+   * receive it in the `room-state` participant list. No-op when the room or
+   * participant is unknown.
+   */
+  setPage(roomId: string, socketId: string, name: string | null): void {
+    const participant = this.rooms.get(roomId)?.participants.get(socketId);
+    if (participant) participant.page = name;
+  }
+
   listParticipants(roomId: string): Participant[] {
     const room = this.rooms.get(roomId);
     return room ? [...room.participants.values()] : [];

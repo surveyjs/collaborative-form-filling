@@ -91,6 +91,26 @@ describe("RoomManager", () => {
     expect(rm.listParticipants("r1")[0].focus).toBeUndefined();
   });
 
+  it("stores and clears a participant's page", () => {
+    const rm = new RoomManager();
+    rm.join("r1", "sock-1", "Alice");
+
+    rm.setPage("r1", "sock-1", "team");
+    expect(rm.listParticipants("r1")[0].page).toBe("team");
+
+    rm.setPage("r1", "sock-1", null);
+    expect(rm.listParticipants("r1")[0].page).toBeNull();
+  });
+
+  it("ignores setPage for unknown rooms and participants", () => {
+    const rm = new RoomManager();
+    expect(() => rm.setPage("ghost-room", "sock-1", "team")).not.toThrow();
+
+    rm.join("r1", "sock-1", "Alice");
+    rm.setPage("r1", "ghost-sock", "team");
+    expect(rm.listParticipants("r1")[0].page).toBeUndefined();
+  });
+
   it("drops focus together with the participant on leave", () => {
     const rm = new RoomManager();
     rm.join("r1", "sock-1", "Alice");

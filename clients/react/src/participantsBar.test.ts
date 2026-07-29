@@ -121,6 +121,24 @@ describe("ParticipantsBarModel", () => {
     });
   });
 
+  describe("chipClick", () => {
+    test("invokes onChipClick with the participant id", () => {
+      const onChipClick = vi.fn();
+      const model = new ParticipantsBarModel({ selfId: "id0", onChipClick });
+      model.setParticipants(roster("Alice", "Bob"));
+
+      expect(model.chipsClickable).toBe(true);
+      model.chipClick("id1");
+      expect(onChipClick).toHaveBeenCalledWith("id1");
+    });
+
+    test("is a safe no-op without the option", () => {
+      const model = new ParticipantsBarModel();
+      expect(model.chipsClickable).toBe(false);
+      expect(() => model.chipClick("id1")).not.toThrow();
+    });
+  });
+
   test("dispose is idempotent and cancels the pending caption revert", () => {
     vi.useFakeTimers();
     vi.stubGlobal("navigator", { clipboard: { writeText: () => Promise.resolve() } });

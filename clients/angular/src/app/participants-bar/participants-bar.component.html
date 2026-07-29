@@ -25,7 +25,14 @@
       *ngFor="let chip of model.chips; let i = index; trackBy: trackChip"
       role="listitem"
       [title]="chip.title"
-      [ngStyle]="{ display: 'inline-flex' }"
+      [attr.tabindex]="model.chipsClickable ? 0 : null"
+      (click)="model.chipClick(chip.id)"
+      (keydown.enter)="model.chipClick(chip.id)"
+      (keydown.space)="model.chipClick(chip.id)"
+      [ngStyle]="{
+        display: 'inline-flex',
+        cursor: model.chipsClickable ? 'pointer' : 'default'
+      }"
     >
       <span
         [ngStyle]="{

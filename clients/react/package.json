@@ -13,8 +13,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.1",
-    "survey-core": "file:../../../survey-library/packages/survey-core/build",
-    "survey-react-ui": "file:../../../survey-library/packages/survey-react-ui/build"
+    "survey-core": "next",
+    "survey-react-ui": "next"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",

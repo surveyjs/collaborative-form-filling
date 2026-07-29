@@ -4,6 +4,9 @@ import { ParticipantsBarModel } from "./participantsBar";
 import type { AppSocket } from "./socket";
 import { attachSurveySync } from "./sync";
 import { attachPresence } from "./presenceSync";
+// Separate import type: the Angular client builds with a TS version that
+// predates inline `type` modifiers in named imports.
+import type { PresenceHandle } from "./presenceSync";
 
 export interface ConnectRoomOptions {
   socket: AppSocket;
@@ -32,7 +35,7 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
   // re-attaching on every participants change.
   let participants: Participant[] = [];
   let detachSync: (() => void) | null = null;
-  let detachPresence: (() => void) | null = null;
+  let presence: PresenceHandle | null = null;
   let bar: ParticipantsBarModel | null = null;
 
   const updateParticipants = (updater: (prev: Participant[]) => Participant[]) => {
@@ -42,13 +45,19 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
 
   const onRoomState = (state: RoomStatePayload) => {
     const model = new Model(state.surveyJson);
+    // `lazyRenderEnabled` is not a serialized survey property (survey-core
+    // ignores it in JSON), but lazy rendering matters for large collaborative
+    // surveys — honor the flag from the room schema explicitly.
+    if ((state.surveyJson as { lazyRenderEnabled?: boolean }).lazyRenderEnabled === true) {
+      model.lazyRenderEnabled = true;
+    }
     model.data = state.data;
 
     // Tear down any previous sync (e.g. on reconnect) before re-attaching.
     detachSync?.();
     detachSync = attachSurveySync({ survey: model, socket, roomId });
-    detachPresence?.();
-    detachPresence = attachPresence({
+    presence?.detach();
+    presence = attachPresence({
       survey: model,
       socket,
       roomId,
@@ -58,7 +67,13 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
     });
 
     bar?.dispose();
-    bar = new ParticipantsBarModel({ roomId, selfId: state.selfId, getInviteLink });
+    bar = new ParticipantsBarModel({
+      roomId,
+      selfId: state.selfId,
+      getInviteLink,
+      // Late-bound so the click always targets the current presence session.
+      onChipClick: (id) => presence?.goToParticipant(id),
+    });
 
     updateParticipants(() => state.participants);
     onSurvey(model, bar);
@@ -84,8 +99,8 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
     socket.off("participant-left", onLeft);
     detachSync?.();
     detachSync = null;
-    detachPresence?.();
-    detachPresence = null;
+    presence?.detach();
+    presence = null;
     bar?.dispose();
     bar = null;
   };

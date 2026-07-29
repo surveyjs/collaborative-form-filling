@@ -100,6 +100,116 @@ test("focusing a matrix cell highlights the whole matrix question", async ({ bro
   await ctxB.close();
 });
 
+test("clicking a participant's chip follows them to their focused question", async ({ browser }) => {
+  const ROOM = "e2e-presence-follow";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  // A moves to the Team page and focuses a cell of the `members` matrix.
+  await pageA.locator(".sd-navigation__next-btn").click();
+  await expect(pageA.locator('[data-name="members"]')).toBeVisible();
+  await pageA.locator('[data-name="members"] input').first().click();
+
+  // B (still on page 1) clicks Alice's chip and lands on her question. The
+  // click is retried: A's focus broadcast may not have reached B yet, and the
+  // jump is idempotent.
+  const chip = pageB.getByTestId("participants").getByTitle("Alice");
+  await expect(chip).toBeVisible();
+  await expect(async () => {
+    await chip.click();
+    await expect(pageB.locator('[data-name="members"]')).toBeInViewport({ timeout: 1_500 });
+  }).toPass({ timeout: 15_000 });
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test("clicking the chip of a peer without focus switches to their page", async ({ browser }) => {
+  const ROOM = "e2e-presence-follow-page";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  // A navigates to the Team page without focusing any question (the Next
+  // button is not a question, so no focus is broadcast).
+  await pageA.locator(".sd-navigation__next-btn").click();
+  await expect(pageA.locator('[data-name="members"]')).toBeVisible();
+
+  // B follows A's page (no focus, no scroll target — page switch only).
+  const chip = pageB.getByTestId("participants").getByTitle("Alice");
+  await expect(async () => {
+    await chip.click();
+    await expect(pageB.locator('[data-name="members"]')).toBeVisible({ timeout: 1_500 });
+  }).toPass({ timeout: 15_000 });
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test("following a peer works on a large lazy-rendering survey", async ({ browser }) => {
+  const ROOM = "e2e-presence-follow-lazy";
+  // 30 questions on page 2 — far beyond the lazy first batch, so the target
+  // row has no DOM until forced to render by the follow jump.
+  const LAZY_SCHEMA = {
+    lazyRenderEnabled: true,
+    pages: [
+      { name: "p1", elements: [{ type: "text", name: "intro" }] },
+      {
+        name: "p2",
+        elements: Array.from({ length: 30 }, (_, i) => ({
+          type: "text",
+          name: `q${i + 1}`,
+        })),
+      },
+    ],
+  };
+
+  // A creates the room with the lazy schema (the lobby shows the schema field
+  // only for rooms that don't exist yet, so A fills the form explicitly).
+  const ctxA = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  await pageA.goto("/");
+  await pageA.getByTestId("name-input").fill("Alice");
+  await pageA.getByTestId("room-input").fill(ROOM);
+  await pageA.getByTestId("survey-json-input").fill(JSON.stringify(LAZY_SCHEMA));
+  await pageA.getByTestId("join-button").click();
+  await expect(pageA.locator('[data-name="intro"]')).toBeVisible();
+
+  // B joins manually too: joinRoom() waits for the default survey's label.
+  const ctxB = await browser.newContext();
+  const pageB = await ctxB.newPage();
+  await pageB.goto(`/?room=${ROOM}`);
+  await pageB.getByTestId("name-input").fill("Bob");
+  await pageB.getByTestId("join-button").click();
+  await expect(pageB.locator('[data-name="intro"]')).toBeVisible();
+
+  // A goes to page 2 and scrolls until the lazily rendered q30 appears,
+  // then focuses it.
+  await pageA.locator(".sd-navigation__next-btn").click();
+  await expect(pageA.locator('[data-name="q1"]')).toBeVisible();
+  await pageA.mouse.move(400, 300);
+  await expect(async () => {
+    await pageA.mouse.wheel(0, 3_000);
+    await expect(pageA.locator('[data-name="q30"] input')).toBeVisible({ timeout: 300 });
+  }).toPass({ timeout: 15_000 });
+  await pageA.locator('[data-name="q30"] input').click();
+
+  // B follows: the jump must switch the page, force-render q30's row and
+  // scroll it into view.
+  const chip = pageB.getByTestId("participants").getByTitle("Alice");
+  await expect(chip).toBeVisible();
+  await expect(async () => {
+    await chip.click();
+    await expect(pageB.locator('[data-name="q30"]')).toBeInViewport({ timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
 test("mouse movement shows a labeled cursor for other participants", async ({ browser }) => {
   const ROOM = "e2e-presence-cursor";
   const ctxA = await browser.newContext();

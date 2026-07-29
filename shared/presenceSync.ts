@@ -1,9 +1,11 @@
-import type { Model } from "survey-core";
+import type { Model, PageModel } from "survey-core";
 import type {
   CursorBroadcastPayload,
   CursorPayload,
   FocusBroadcastPayload,
   FocusPayload,
+  PageBroadcastPayload,
+  PagePayload,
   Participant,
 } from "./events";
 // NOTE: presenceSync.css is NOT imported here — this module is shared by all
@@ -28,11 +30,14 @@ const BADGE_GAP_PX = 6;
  */
 export interface PresenceSocket {
   emit(event: "focus-question", payload: FocusPayload): void;
+  emit(event: "page-changed", payload: PagePayload): void;
   emit(event: "cursor-moved", payload: CursorPayload): void;
   on(event: "focus-question", handler: (payload: FocusBroadcastPayload) => void): void;
+  on(event: "page-changed", handler: (payload: PageBroadcastPayload) => void): void;
   on(event: "cursor-moved", handler: (payload: CursorBroadcastPayload) => void): void;
   on(event: "participant-left", handler: (payload: { id: string }) => void): void;
   off(event: "focus-question", handler: (payload: FocusBroadcastPayload) => void): void;
+  off(event: "page-changed", handler: (payload: PageBroadcastPayload) => void): void;
   off(event: "cursor-moved", handler: (payload: CursorBroadcastPayload) => void): void;
   off(event: "participant-left", handler: (payload: { id: string }) => void): void;
   /** socket.io volatile modifier — cursor packets may be dropped, never queued */
@@ -53,9 +58,24 @@ export interface AttachPresenceOptions {
 
 interface PeerState {
   focus: string | null;
+  /** survey page the peer is on (see `pageKey`), or null when unknown */
+  page: string | null;
   cursor: { name: string; x: number; y: number } | null;
   /** timestamp of the last cursor update, for the idle fade */
   cursorAt: number;
+}
+
+/** Handle returned by `attachPresence`. */
+export interface PresenceHandle {
+  /**
+   * Jumps the local survey to a peer's location: switches to the page of the
+   * peer's focused question (or, lacking focus, the question under their
+   * recent cursor) and scrolls it into view; with neither, just switches to
+   * the peer's page. No-op when nothing about the peer's location is known.
+   */
+  goToParticipant(id: string): void;
+  /** Removes all listeners and DOM artifacts. */
+  detach(): void;
 }
 
 interface PeerArtifacts {
@@ -72,6 +92,23 @@ const CURSOR_SVG =
 const round3 = (n: number) => Math.round(Math.max(0, Math.min(1, n)) * 1000) / 1000;
 
 /**
+ * Stable page identifier shared across clients: the page name, or "#<index>"
+ * for unnamed pages (safe because every client renders the same surveyJson).
+ */
+export const pageKey = (survey: Model, page: PageModel): string =>
+  page.name || `#${survey.pages.indexOf(page)}`;
+
+/** Inverse of `pageKey`; null when the page is unknown or not visible. */
+export const resolvePage = (survey: Model, key: string): PageModel | null => {
+  let page: PageModel | null = survey.getPageByName(key) ?? null;
+  if (!page && key.startsWith("#")) {
+    const index = Number(key.slice(1));
+    page = (Number.isInteger(index) && survey.pages[index]) || null;
+  }
+  return page && survey.visiblePages.indexOf(page) >= 0 ? page : null;
+};
+
+/**
  * Broadcasts this participant's presence (focused question + mouse cursor) and
  * renders the presence of remote participants:
  *
@@ -84,11 +121,15 @@ const round3 = (n: number) => Math.round(Math.max(0, Math.min(1, n)) * 1000) / 1
  *   converge across differently sized windows. Rendered as an SVG arrow + name
  *   pill in a fixed pointer-transparent layer.
  *
+ * Also tracks which survey page each participant is on (`page-changed`,
+ * mirroring the focus pattern) and exposes `goToParticipant` so hosts (e.g.
+ * the participants bar) can jump to a peer's location.
+ *
  * MVP limitations (accepted): the cursor hides when not over a question (no
  * page-level anchor); two peers focusing one question show a single ring
  * (first wins); late joiners see peers' cursors only after their next move.
  *
- * Returns a detach function that removes all listeners and DOM artifacts.
+ * Returns a {@link PresenceHandle} with `goToParticipant` and `detach`.
  */
 export function attachPresence({
   survey,
@@ -97,7 +138,7 @@ export function attachPresence({
   selfId,
   initialParticipants,
   getParticipant,
-}: AttachPresenceOptions): () => void {
+}: AttachPresenceOptions): PresenceHandle {
   const doc = document;
   let disposed = false;
 
@@ -106,13 +147,15 @@ export function attachPresence({
   const ensurePeer = (id: string): PeerState => {
     let peer = peers.get(id);
     if (!peer) {
-      peer = { focus: null, cursor: null, cursorAt: 0 };
+      peer = { focus: null, page: null, cursor: null, cursorAt: 0 };
       peers.set(id, peer);
     }
     return peer;
   };
   for (const p of initialParticipants) {
-    if (p.id !== selfId && p.focus) ensurePeer(p.id).focus = p.focus;
+    if (p.id === selfId) continue;
+    if (p.focus) ensurePeer(p.id).focus = p.focus;
+    if (p.page) ensurePeer(p.id).page = p.page;
   }
 
   // ---- overlay layer + per-peer DOM artifacts ----
@@ -291,6 +334,18 @@ export function attachPresence({
     if (target?.closest?.("[data-name]")) cancelBlur();
   };
 
+  // ---- outgoing: current page ----
+  let lastSentPage: string | null = null;
+  const sendPage = (name: string | null) => {
+    if (name === lastSentPage) return;
+    lastSentPage = name;
+    socket.emit("page-changed", { roomId, name });
+  };
+  const onCurrentPageChanged = () => {
+    const page = survey.currentPage as PageModel | null;
+    sendPage(page ? pageKey(survey, page) : null);
+  };
+
   // ---- outgoing: mouse cursor ----
   const emitCursor = (payload: CursorPayload) =>
     (socket.volatile ?? socket).emit("cursor-moved", payload);
@@ -347,6 +402,10 @@ export function attachPresence({
     ensurePeer(id).focus = name;
     render();
   };
+  const onRemotePage = ({ id, name }: PageBroadcastPayload) => {
+    // Nothing rendered depends on the page, so no render() here.
+    ensurePeer(id).page = name;
+  };
   const onRemoteCursor = ({ id, name, x, y }: CursorBroadcastPayload) => {
     const peer = ensurePeer(id);
     peer.cursor = name ? { name, x, y } : null;
@@ -359,8 +418,56 @@ export function attachPresence({
     render();
   };
 
+  // ---- jump to a peer's location (see PresenceHandle.goToParticipant) ----
+
+  // A page switch re-renders asynchronously (framework-dependent), so poll
+  // for the question node over rAF ticks before scrolling; expires silently —
+  // the user is already on the right page by then.
+  const scrollToQuestion = (name: string) => {
+    let attempts = 60; // ~1s of rAF ticks
+    const tick = () => {
+      if (disposed) return;
+      const node = findQuestionNode(name);
+      if (node) {
+        // jsdom may stub the node without scrollIntoView.
+        if (typeof node.scrollIntoView === "function") {
+          node.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        return;
+      }
+      if (--attempts > 0) raf(tick);
+    };
+    tick();
+  };
+
+  // Deliberately not survey.focusQuestion(): that steals keyboard focus,
+  // which both yanks the local user's caret and broadcasts OUR focus.
+  const goToParticipant = (id: string) => {
+    const peer = peers.get(id);
+    if (!peer) return;
+    const cursorFresh = peer.cursor && Date.now() - peer.cursorAt < CURSOR_IDLE_MS;
+    const target = peer.focus ?? (cursorFresh ? peer.cursor!.name : null);
+    if (target) {
+      const question = survey.getQuestionByName(target);
+      const page = question?.isVisible ? ((question.page as PageModel | null) ?? null) : null;
+      if (page && survey.visiblePages.indexOf(page) >= 0) {
+        if (survey.currentPage !== page) survey.currentPage = page;
+        // Under lazy rendering off-screen rows have no DOM until scrolled to,
+        // so the poll below would never find the node; mark the target row
+        // for rendering first (no-op for rows already rendered).
+        if (survey.isLazyRendering) page.forceRenderElement(question);
+        scrollToQuestion(target);
+        return;
+      }
+    }
+    // No usable question — fall back to the peer's page, without scrolling.
+    const page = peer.page ? resolvePage(survey, peer.page) : null;
+    if (page && survey.currentPage !== page) survey.currentPage = page;
+  };
+
   // ---- wiring ----
   survey.onFocusInQuestion.add(onFocusInQuestion);
+  survey.onCurrentPageChanged.add(onCurrentPageChanged);
   doc.addEventListener("focusout", onFocusOut, true);
   doc.addEventListener("focusin", onFocusIn, true);
   doc.addEventListener("mousemove", onMouseMove, true);
@@ -370,8 +477,13 @@ export function attachPresence({
   window.addEventListener("resize", refresh);
 
   socket.on("focus-question", onRemoteFocus);
+  socket.on("page-changed", onRemotePage);
   socket.on("cursor-moved", onRemoteCursor);
   socket.on("participant-left", onParticipantLeft);
+
+  // Announce the initial page so the server has one for every participant,
+  // even those who never navigate (late joiners then see it in room-state).
+  onCurrentPageChanged();
 
   // Question nodes are re-created by React/SurveyJS renders; re-apply
   // decorations whenever the DOM changes, with a safety tick as backstop.
@@ -381,9 +493,10 @@ export function attachPresence({
 
   render();
 
-  return () => {
+  const detach = () => {
     disposed = true;
     survey.onFocusInQuestion.remove(onFocusInQuestion);
+    survey.onCurrentPageChanged.remove(onCurrentPageChanged);
     doc.removeEventListener("focusout", onFocusOut, true);
     doc.removeEventListener("focusin", onFocusIn, true);
     doc.removeEventListener("mousemove", onMouseMove, true);
@@ -393,6 +506,7 @@ export function attachPresence({
     window.removeEventListener("resize", refresh);
 
     socket.off("focus-question", onRemoteFocus);
+    socket.off("page-changed", onRemotePage);
     socket.off("cursor-moved", onRemoteCursor);
     socket.off("participant-left", onParticipantLeft);
 
@@ -408,4 +522,6 @@ export function attachPresence({
     decorated.clear();
     layer.remove();
   };
+
+  return { goToParticipant, detach };
 }

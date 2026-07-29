@@ -9,8 +9,8 @@
   },
   "dependencies": {
     "socket.io-client": "^4.8.1",
-    "survey-core": "file:../../../survey-library/packages/survey-core/build",
-    "survey-js-ui": "file:../../../survey-library/packages/survey-js-ui/build"
+    "survey-core": "next",
+    "survey-js-ui": "next"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

@@ -16,7 +16,14 @@
         :key="chip.id"
         role="listitem"
         :title="chip.title"
-        :style="{ display: 'inline-flex' }"
+        :tabindex="props.model.chipsClickable ? 0 : undefined"
+        :style="{
+          display: 'inline-flex',
+          cursor: props.model.chipsClickable ? 'pointer' : 'default',
+        }"
+        @click="props.model.chipClick(chip.id)"
+        @keydown.enter.prevent="props.model.chipClick(chip.id)"
+        @keydown.space.prevent="props.model.chipClick(chip.id)"
       >
         <span :style="chipCircleStyle(chip.color, index + 1)">{{
           chip.initials
