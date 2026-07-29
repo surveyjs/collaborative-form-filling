@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Collaborative Survey — Plain JS</title>
+    <style>
+      html, body { margin: 0; }
+      /* Flex column: the bar keeps its own height, the survey gets the rest
+         and scrolls internally. overflow:hidden prevents a second page-level
+         scrollbar of the bar's height. */
+      main { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <main id="root"><p>Connecting to the room…</p></main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

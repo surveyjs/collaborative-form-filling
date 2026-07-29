@@ -4,14 +4,23 @@
   "version": "0.1.0",
   "description": "Real-time collaborative survey filling (SurveyJS + Socket.IO)",
   "workspaces": [
-    "packages/server",
-    "packages/client"
+    "server",
+    "lobby",
+    "clients/react",
+    "clients/js",
+    "clients/vue"
   ],
   "scripts": {
     "dev": "npm -w server run dev",
-    "build": "npm -w server run build && npm -w client run build",
+    "build": "npm -w server run build && npm run build:lobby && npm run build:react && npm run build:js && npm run build:vue && npm run build:angular",
+    "build:lobby": "npm -w lobby run build",
+    "build:react": "npm -w clients/react run build",
+    "build:js": "npm -w clients/js run build",
+    "build:vue": "npm -w clients/vue run build",
+    "build:angular": "npm --prefix clients/angular run build",
+    "install:angular": "npm --prefix clients/angular install",
     "start": "npm -w server run start",
-    "test": "npm -w server test && npm -w client test",
+    "test": "npm -w server test && npm -w clients/react test",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install"
   },

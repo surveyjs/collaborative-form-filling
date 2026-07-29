@@ -247,3 +247,35 @@ test("a visibleIf-gated question appears on every client when its condition is m
   await ctxA.close();
   await ctxB.close();
 });
+
+test("the schema block is shown only for rooms that don't exist yet", async ({ browser }) => {
+  const ROOM = "e2e-exists-check";
+  // Alice keeps the room alive while the lobby is probed from another context.
+  const ctxA = await browser.newContext();
+  await joinRoomWithSchema(ctxA, "Alice", ROOM);
+
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await page.goto("/");
+
+  // No room typed yet -> no schema block.
+  await expect(page.getByTestId("survey-json-input")).toHaveCount(0);
+
+  // An existing room -> still no schema block, and the hint says "join".
+  await page.getByTestId("room-input").fill(ROOM);
+  await expect(page.getByText(/Room exists — 1 participant online/)).toBeVisible();
+  await expect(page.getByTestId("survey-json-input")).toHaveCount(0);
+
+  // A fresh room id -> the schema block appears with the "create" hint.
+  await page.getByTestId("room-input").fill(`${ROOM}-new`);
+  await expect(page.getByText(/Room doesn't exist yet/)).toBeVisible();
+  await expect(page.getByTestId("survey-json-input")).toBeVisible();
+
+  // Clearing the id hides the block again.
+  await page.getByTestId("room-input").fill("");
+  await expect(page.getByText("If empty, a new room will be created.")).toBeVisible();
+  await expect(page.getByTestId("survey-json-input")).toHaveCount(0);
+
+  await ctx.close();
+  await ctxA.close();
+});

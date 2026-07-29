@@ -1,0 +1,108 @@
+<div
+  class="sv-participants-bar"
+  [ngStyle]="{
+    display: 'flex',
+    'align-items': 'center',
+    gap: '12px',
+    padding: '8px 12px',
+    background: barBg,
+    'border-bottom': '1px solid #d4d4d4',
+    'font-family': 'Open Sans, sans-serif',
+    'font-size': '14px'
+  }"
+>
+  <div *ngIf="model.roomId" [ngStyle]="{ color: '#555' }">
+    Room: <strong data-testid="room-id">{{ model.roomId }}</strong>
+  </div>
+  <div [ngStyle]="{ flex: 1 }"></div>
+  <div
+    data-testid="participants"
+    role="list"
+    aria-label="Participants"
+    [ngStyle]="{ display: 'flex', 'align-items': 'center', 'padding-right': '3px' }"
+  >
+    <div
+      *ngFor="let chip of model.chips; let i = index; trackBy: trackChip"
+      role="listitem"
+      [title]="chip.title"
+      [ngStyle]="{ display: 'inline-flex' }"
+    >
+      <span
+        [ngStyle]="{
+          width: '28px',
+          height: '28px',
+          'border-radius': '50%',
+          'box-sizing': 'border-box',
+          display: 'inline-flex',
+          'align-items': 'center',
+          'justify-content': 'center',
+          color: '#fff',
+          'font-size': '12px',
+          'font-weight': 600,
+          background: chip.color,
+          'box-shadow': chipRing(),
+          'margin-right': '-3px',
+          position: 'relative',
+          'z-index': i + 1
+        }"
+        >{{ chip.initials }}</span
+      >
+      <span
+        [ngStyle]="{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          overflow: 'hidden',
+          clip: 'rect(0 0 0 0)',
+          'white-space': 'nowrap'
+        }"
+        >{{ chip.title }}</span
+      >
+    </div>
+    <div
+      *ngIf="model.overflowCount > 0"
+      role="listitem"
+      [title]="model.overflowTitle"
+      [ngStyle]="{ display: 'inline-flex' }"
+    >
+      <span
+        [ngStyle]="{
+          width: '28px',
+          height: '28px',
+          'border-radius': '50%',
+          'box-sizing': 'border-box',
+          display: 'inline-flex',
+          'align-items': 'center',
+          'justify-content': 'center',
+          color: '#fff',
+          'font-size': '12px',
+          'font-weight': 600,
+          background: '#909090',
+          'box-shadow': chipRing(),
+          'margin-right': '-3px',
+          position: 'relative',
+          'z-index': model.chips.length + 1
+        }"
+        >+{{ model.overflowCount }}</span
+      >
+    </div>
+  </div>
+  <button
+    *ngIf="model.showInvite"
+    type="button"
+    data-testid="copy-link"
+    aria-label="Copy invite link"
+    (click)="model.copyInviteLink()"
+    [ngStyle]="{
+      border: 'none',
+      'border-radius': '8px',
+      padding: '8px 12px',
+      background: '#19b394',
+      color: '#fff',
+      'font-weight': 600,
+      cursor: 'pointer'
+    }"
+  >
+    {{ model.inviteCaption }}
+  </button>
+</div>

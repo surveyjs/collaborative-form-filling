@@ -26,8 +26,8 @@ test("two participants co-edit one survey response in real time", async ({ brows
   const pageA = await joinRoom(ctxA, "Alice", ROOM);
   const pageB = await joinRoom(ctxB, "Bob", ROOM);
 
-  // Presence: A should eventually see two participants.
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(2);
+  // Presence: A eventually sees the OTHER participant (self is not shown).
+  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(1);
 
   // A edits the text question -> B sees it.
   const textA = pageA.getByLabel("Project name");
@@ -41,9 +41,9 @@ test("two participants co-edit one survey response in real time", async ({ brows
     pageA.getByRole("radio", { name: "Prototype" }),
   ).toBeChecked();
 
-  // Presence: when B leaves, A drops back to a single participant.
+  // Presence: when B leaves, A's roster of others empties.
   await ctxB.close();
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(1);
+  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(0);
 
   await ctxA.close();
 });
@@ -129,7 +129,10 @@ test("clearing a matrixdynamic dropdown cell keeps the row for other participant
 
   // B picks a Role in the only row (first dropdown column) -> A sees it.
   // Click the dropdown container: an overlay wrapper intercepts pointer
-  // events aimed at the inner combobox input.
+  // events aimed at the inner combobox input. Scroll the table into view
+  // first: focusing the combobox auto-scrolls the survey's inner scroller,
+  // and survey-core hides an open dropdown popup on any scroller scroll.
+  await pageB.getByRole("table").scrollIntoViewIfNeeded();
   await pageB.getByRole("table").locator(".sd-dropdown").first().click();
   await pageB.getByRole("option", { name: "Developer" }).click();
   await expect(pageA.getByRole("table")).toContainText("Developer");
@@ -144,6 +147,37 @@ test("clearing a matrixdynamic dropdown cell keeps the row for other participant
   await expect(pageA.getByRole("table").getByRole("textbox").first()).toBeVisible();
   // B keeps their row too, and the cleared state converges on both sides.
   await expect(pageB.getByRole("table").getByRole("textbox").first()).toBeVisible();
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test("adding and removing an empty matrixdynamic row syncs to other participants", async ({ browser }) => {
+  const ROOM = "e2e-matrix-add-row";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  await nextPage(pageA);
+  await nextPage(pageB);
+  await expect(pageB.getByText("Team members")).toBeVisible();
+
+  // Each matrix row has exactly one text cell (the Name column), so the
+  // textbox count inside the table equals the row count.
+  const rowsOf = (page: Page) => page.getByRole("table").getByRole("textbox");
+  await expect(rowsOf(pageA)).toHaveCount(1);
+
+  // A adds an empty row. No cell is filled, so no value is written — the sync
+  // must ride onMatrixRowAdded, not onValueChanged.
+  await pageA.getByText("Add team member", { exact: true }).click();
+  await expect(rowsOf(pageA)).toHaveCount(2);
+  await expect(rowsOf(pageB)).toHaveCount(2);
+
+  // B removes the (still empty) extra row -> A drops back to one row.
+  await pageB.getByRole("table").getByRole("button", { name: "Remove" }).last().click();
+  await expect(rowsOf(pageB)).toHaveCount(1);
+  await expect(rowsOf(pageA)).toHaveCount(1);
 
   await ctxA.close();
   await ctxB.close();
@@ -184,7 +218,7 @@ test("an edit fans out to all participants in a three-person room", async ({ bro
   const pageC = await joinRoom(ctxC, "Carol", ROOM);
 
   // Presence: Alice eventually sees all three participants.
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(3);
+  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(2);
 
   // A single edit by Alice fans out to both Bob and Carol.
   const textA = pageA.getByLabel("Project name");
@@ -235,10 +269,9 @@ test("reloading rejoins the room and restores previous answers", async ({ browse
   await pageA.getByText("Prototype", { exact: true }).click();
   await expect(pageA.getByRole("radio", { name: "Prototype" })).toBeChecked();
 
-  // Reload drops Alice back to the join form (room prefilled from ?room=).
+  // Reload auto-rejoins: the client reads room and name from the URL the
+  // lobby navigated to (/react/?room=<id>&name=<n>), no form involved.
   await pageA.reload();
-  await pageA.getByTestId("name-input").fill("Alice");
-  await pageA.getByTestId("join-button").click();
 
   // Her answers are restored from the persisted room state.
   await expect(pageA.getByTestId("room-id")).toHaveText(ROOM);
@@ -249,30 +282,30 @@ test("reloading rejoins the room and restores previous answers", async ({ browse
   await ctxB.close();
 });
 
-test("presence marks the current user and assigns distinct colors", async ({ browser }) => {
+test("the bar shows only the other participants with distinct colors", async ({ browser }) => {
   const ROOM = "e2e-presence";
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const pageA = await joinRoom(ctxA, "Alice", ROOM);
   const pageB = await joinRoom(ctxB, "Bob", ROOM);
 
+  // Each side lists exactly the OTHER participant — never itself.
   const listA = pageA.getByTestId("participants");
-  await expect(listA.getByRole("listitem")).toHaveCount(2);
-  // Each client sees itself tagged "(you)" and the other plain.
-  await expect(listA.getByRole("listitem").filter({ hasText: "Alice (you)" })).toHaveCount(1);
+  await expect(listA.getByRole("listitem")).toHaveCount(1);
   await expect(listA.getByRole("listitem").filter({ hasText: "Bob" })).toHaveCount(1);
-  await expect(listA.getByText("Bob (you)")).toHaveCount(0);
+  await expect(listA.getByText("Alice")).toHaveCount(0);
 
   const listB = pageB.getByTestId("participants");
-  await expect(listB.getByRole("listitem").filter({ hasText: "Bob (you)" })).toHaveCount(1);
-  await expect(listB.getByText("Alice (you)")).toHaveCount(0);
+  await expect(listB.getByRole("listitem")).toHaveCount(1);
+  await expect(listB.getByRole("listitem").filter({ hasText: "Alice" })).toHaveCount(1);
+  await expect(listB.getByText("Bob")).toHaveCount(0);
 
-  // The two presence dots get different palette colors. The first <span> in
-  // each listitem is the color swatch (Presence.tsx).
-  const swatch = (i: number) =>
-    listA.getByRole("listitem").nth(i).locator("span").first()
+  // The two participants get different palette colors. The first <span> in
+  // a listitem is the avatar circle carrying the color.
+  const swatchOf = (list: ReturnType<Page["getByTestId"]>) =>
+    list.getByRole("listitem").first().locator("span").first()
       .evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(await swatch(0)).not.toBe(await swatch(1));
+  expect(await swatchOf(listA)).not.toBe(await swatchOf(listB));
 
   await ctxA.close();
   await ctxB.close();

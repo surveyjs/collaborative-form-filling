@@ -1,0 +1,62 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "cli": {
+    "analytics": false
+  },
+  "version": 1,
+  "projects": {
+    "client-angular": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src",
+      "prefix": "app",
+      "architect": {
+        "build": {
+          "builder": "@angular-devkit/build-angular:browser",
+          "options": {
+            "outputPath": "dist",
+            "index": "src/index.html",
+            "main": "src/main.ts",
+            "polyfills": "src/polyfills.ts",
+            "tsConfig": "tsconfig.app.json",
+            "baseHref": "/angular/",
+            "preserveSymlinks": true,
+            "assets": [
+              { "glob": "survey-core.min.css", "input": "./node_modules/survey-core", "output": "/" },
+              { "glob": "presenceSync.css", "input": "../../shared", "output": "/" }
+            ],
+            "styles": [],
+            "scripts": []
+          },
+          "configurations": {
+            "production": {
+              "budgets": [
+                { "type": "initial", "maximumError": "6mb" },
+                { "type": "anyComponentStyle", "maximumError": "500kb" }
+              ],
+              "outputHashing": "all"
+            },
+            "development": {
+              "buildOptimizer": false,
+              "optimization": false,
+              "vendorChunk": true,
+              "extractLicenses": false,
+              "sourceMap": true,
+              "namedChunks": true
+            }
+          },
+          "defaultConfiguration": "production"
+        },
+        "serve": {
+          "builder": "@angular-devkit/build-angular:dev-server",
+          "configurations": {
+            "production": { "browserTarget": "client-angular:build:production" },
+            "development": { "browserTarget": "client-angular:build:development" }
+          },
+          "defaultConfiguration": "development"
+        }
+      }
+    }
+  },
+  "defaultProject": "client-angular"
+}

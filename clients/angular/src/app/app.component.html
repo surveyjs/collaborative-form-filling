@@ -1,0 +1,10 @@
+<!-- Flex column: the bar keeps its own height, the survey gets the rest and
+     scrolls internally. overflow:hidden prevents a second page-level
+     scrollbar of the bar's height. -->
+<main style="height: 100vh; display: flex; flex-direction: column; overflow: hidden">
+  <app-participants-bar *ngIf="bar" [model]="bar"></app-participants-bar>
+  <div *ngIf="survey" style="flex: 1 1 auto; min-height: 0">
+    <survey [model]="survey"></survey>
+  </div>
+  <p *ngIf="!survey">Connecting to the room…</p>
+</main>
