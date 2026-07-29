@@ -18,7 +18,8 @@
     "build:js": "npm -w clients/js run build",
     "build:vue": "npm -w clients/vue run build",
     "build:angular": "npm --prefix clients/angular run build",
-    "install:angular": "npm --prefix clients/angular install",
+    "install:angular": "node scripts/install-angular.cjs",
+    "postinstall": "node scripts/install-angular.cjs",
     "start": "npm -w server run start",
     "test": "npm -w server test && npm -w clients/react test",
     "test:e2e": "playwright test",
@@ -26,5 +27,9 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0"
+  },
+  "overrides": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1"
   }
 }

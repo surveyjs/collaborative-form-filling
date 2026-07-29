@@ -19,6 +19,7 @@
     "rxjs": "~6.6.0",
     "socket.io-client": "^4.8.1",
     "survey-angular-ui": "next",
+    "survey-collaboration": "file:../..",
     "survey-core": "next",
     "tslib": "^2.3.0",
     "zone.js": "~0.11.4"
