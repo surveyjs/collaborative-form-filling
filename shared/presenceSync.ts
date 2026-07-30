@@ -89,7 +89,9 @@ const CURSOR_SVG =
   '<path d="M1 1 L1 14 L4.5 10.8 L7 16.5 L9.3 15.5 L6.8 9.9 L11.5 9.6 Z" ' +
   'stroke="#fff" stroke-width="1"/></svg>';
 
-const round3 = (n: number) => Math.round(Math.max(0, Math.min(1, n)) * 1000) / 1000;
+// Deliberately unclamped: fractions outside 0..1 encode positions outside the
+// anchor question's box (nearest-question anchoring, see captureMouse).
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
 /**
  * Stable page identifier shared across clients: the page name, or "#<index>"
@@ -117,17 +119,21 @@ export const resolvePage = (survey: Model, key: string): PageModel | null => {
  *   is drawn natively — a `data-collab-focus` attribute plus a peer-color CSS
  *   variable on the question root — so it scrolls and clips for free.
  * - Cursor: throttled document `mousemove` anchored to the outermost
- *   `[data-name]` question root as 0..1 fractions of its rect, so positions
- *   converge across differently sized windows. Rendered as an SVG arrow + name
- *   pill in a fixed pointer-transparent layer.
+ *   `[data-name]` question root as fractions of its rect, so positions
+ *   converge across differently sized windows. When the pointer is not over
+ *   a question (page gaps, headers, the app chrome) it anchors to the NEAREST
+ *   question rect instead, with fractions extrapolated outside 0..1 — the
+ *   cursor stays visible everywhere in the window. Rendered as an SVG arrow +
+ *   name pill in a fixed pointer-transparent layer.
  *
  * Also tracks which survey page each participant is on (`page-changed`,
  * mirroring the focus pattern) and exposes `goToParticipant` so hosts (e.g.
  * the participants bar) can jump to a peer's location.
  *
- * MVP limitations (accepted): the cursor hides when not over a question (no
- * page-level anchor); two peers focusing one question show a single ring
- * (first wins); late joiners see peers' cursors only after their next move.
+ * MVP limitations (accepted): a peer's cursor is hidden while their anchor
+ * question is not rendered locally (other page, lazy rows); two peers
+ * focusing one question show a single ring (first wins); late joiners see
+ * peers' cursors only after their next move.
  *
  * Returns a {@link PresenceHandle} with `goToParticipant` and `detach`.
  */
@@ -358,6 +364,33 @@ export function attachPresence({
     emitCursor({ roomId, name, x, y });
   };
 
+  // Top-level question roots: nested [data-name] cells (composite/matrix)
+  // are excluded because their names are not globally unique.
+  const topLevelQuestionNodes = (): HTMLElement[] =>
+    Array.from(doc.querySelectorAll<HTMLElement>("[data-name]")).filter(
+      (el) => !el.parentElement?.closest("[data-name]"),
+    );
+
+  /** The rendered question rect nearest to a viewport point (or none). */
+  const nearestQuestion = (x: number, y: number) => {
+    let anchor: Element | null = null;
+    let rect: DOMRect | undefined;
+    let best = Infinity;
+    for (const node of topLevelQuestionNodes()) {
+      const r = node.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      const dx = Math.max(r.left - x, 0, x - r.right);
+      const dy = Math.max(r.top - y, 0, y - r.bottom);
+      const d = dx * dx + dy * dy;
+      if (d < best) {
+        best = d;
+        anchor = node;
+        rect = r;
+      }
+    }
+    return { anchor, rect };
+  };
+
   const captureMouse = (ev: MouseEvent) => {
     // Anchor to the OUTERMOST [data-name] ancestor (see onFocusInQuestion).
     let anchor = (ev.target as Element | null)?.closest?.("[data-name]") ?? null;
@@ -368,8 +401,14 @@ export function attachPresence({
     ) {
       anchor = outer;
     }
-    const rect = anchor?.getBoundingClientRect();
+    let rect = anchor?.getBoundingClientRect();
     if (!anchor || !rect || rect.width === 0 || rect.height === 0) {
+      // Not over a question — anchor to the nearest one so the cursor stays
+      // visible everywhere; fractions extrapolate outside 0..1.
+      ({ anchor, rect } = nearestQuestion(ev.clientX, ev.clientY));
+    }
+    if (!anchor || !rect) {
+      // No questions rendered at all (e.g. completion page) — hide.
       sendCursor(null, 0, 0);
       return;
     }

@@ -187,7 +187,34 @@ describe("attachPresence", () => {
       ]);
     });
 
-    it("sends a hide (name: null) when the pointer is not over a question", () => {
+    it("anchors to the nearest question when the pointer is not over one", () => {
+      const { emit } = attach();
+
+      // (50, 50) is above/left of projectName (rect 100,200 400x100) — the
+      // nearest question; fractions extrapolate outside 0..1.
+      moveMouse(document.body, 50, 50);
+      vi.advanceTimersByTime(MOUSE_THROTTLE_MS);
+
+      expect(emitsOf(emit, "cursor-moved")).toEqual([
+        { roomId: "r1", name: "projectName", x: -0.125, y: -1.5 },
+      ]);
+    });
+
+    it("picks the geometrically nearest question in the gap between two", () => {
+      const { emit } = attach();
+
+      // (300, 315) sits between projectName (bottom 300, distance 15) and
+      // owner (top 320, distance 5) — owner wins.
+      moveMouse(document.body, 300, 315);
+      vi.advanceTimersByTime(MOUSE_THROTTLE_MS);
+
+      expect(emitsOf(emit, "cursor-moved")).toEqual([
+        { roomId: "r1", name: "owner", x: 0.5, y: -0.05 },
+      ]);
+    });
+
+    it("sends a hide (name: null) when no question is rendered at all", () => {
+      document.body.innerHTML = ""; // e.g. completion page
       const { emit } = attach();
 
       moveMouse(document.body, 5, 5);
@@ -251,6 +278,17 @@ describe("attachPresence", () => {
       expect(cursor.style.top).toBe("250px"); // 200 + 0.5 * 100
       const label = document.querySelector<HTMLElement>(".collab-cursor-name")!;
       expect(label.textContent).toBe("Bob");
+    });
+
+    it("extrapolates the remote cursor outside the anchor rect for out-of-range fractions", () => {
+      const { receive } = attach();
+
+      receive("cursor-moved", { id: "peer-1", name: "projectName", x: -0.125, y: -1.5 });
+
+      const cursor = document.querySelector<HTMLElement>(".collab-cursor")!;
+      expect(cursor.style.display).toBe("block");
+      expect(cursor.style.left).toBe("50px"); // 100 + (-0.125) * 400
+      expect(cursor.style.top).toBe("50px"); // 200 + (-1.5) * 100
     });
 
     it("hides the cursor on a null anchor", () => {

@@ -234,3 +234,28 @@ test("mouse movement shows a labeled cursor for other participants", async ({ br
   await ctxA.close();
   await ctxB.close();
 });
+
+test("the cursor stays visible outside question blocks (nearest-question anchor)", async ({
+  browser,
+}) => {
+  const ROOM = "e2e-presence-cursor-outside";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  // A moves the mouse near the top-left of the window — over the app chrome,
+  // far from any question. The cursor anchors to the nearest question and
+  // must still render on B. Retried like the in-question cursor test above
+  // (volatile packets may be dropped right after joining).
+  let step = 0;
+  await expect(async () => {
+    step += 1;
+    await pageA.mouse.move(10 + step * 3, 10);
+    await expect(pageB.locator(".collab-cursor")).toBeVisible({ timeout: 500 });
+  }).toPass({ timeout: 15_000 });
+  await expect(pageB.locator(".collab-cursor-name")).toHaveText("Alice");
+
+  await ctxA.close();
+  await ctxB.close();
+});

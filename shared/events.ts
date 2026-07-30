@@ -61,11 +61,17 @@ export interface PagePayload {
 export interface CursorPayload {
   roomId: string;
   /**
-   * Top-level question name the pointer is over, or null to hide the cursor
-   * (pointer left the survey area or is not over any question).
+   * Top-level question name anchoring the cursor: the question under the
+   * pointer, or the nearest rendered one when the pointer is elsewhere in the
+   * window. Null hides the cursor (pointer left the window / tab hidden / no
+   * questions rendered).
    */
   name: string | null;
-  /** Fraction 0..1 of the pointer position within the question's border box. */
+  /**
+   * Pointer position as fractions of the anchor question's border box.
+   * Outside 0..1 when the pointer is outside the question (receivers
+   * extrapolate from the same anchor).
+   */
   x: number;
   y: number;
 }
@@ -105,9 +111,9 @@ export interface PageBroadcastPayload {
 export interface CursorBroadcastPayload {
   /** participant whose cursor moved */
   id: string;
-  /** top-level question name the cursor is over, or null when hidden */
+  /** top-level question name anchoring the cursor, or null when hidden */
   name: string | null;
-  /** fraction 0..1 within the question's border box */
+  /** fractions of the anchor question's border box; may be outside 0..1 */
   x: number;
   y: number;
 }
