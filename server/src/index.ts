@@ -125,11 +125,12 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("page-changed", { id: socket.id, name });
   });
 
-  // Cursor positions are ephemeral: relayed but never stored, and sent as
+  // Cursor paths are ephemeral: relayed but never stored, and sent as
   // volatile so packets are dropped (not queued) for congested clients —
-  // every message carries a full position, so loss is harmless.
-  socket.on("cursor-moved", ({ roomId, name, x, y }) => {
-    socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, x, y });
+  // every packet is a self-contained path segment, so loss shows only as a
+  // small gap the receiver's replay glides over.
+  socket.on("cursor-moved", ({ roomId, name, points }) => {
+    socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, points });
   });
 
   socket.on("disconnect", () => {

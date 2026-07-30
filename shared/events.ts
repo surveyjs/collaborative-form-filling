@@ -58,6 +58,18 @@ export interface PagePayload {
   name: string | null;
 }
 
+/**
+ * One sampled point of a cursor path. `x`/`y` are fractions of the anchor
+ * question's border box (outside 0..1 when the pointer is outside the
+ * question — receivers extrapolate from the same anchor); `t` is the ms
+ * offset from the packet's first sample.
+ */
+export interface CursorPoint {
+  x: number;
+  y: number;
+  t: number;
+}
+
 export interface CursorPayload {
   roomId: string;
   /**
@@ -68,12 +80,12 @@ export interface CursorPayload {
    */
   name: string | null;
   /**
-   * Pointer position as fractions of the anchor question's border box.
-   * Outside 0..1 when the pointer is outside the question (receivers
-   * extrapolate from the same anchor).
+   * Pointer path sampled within one throttle window, ordered by `t`.
+   * Receivers replay it slightly delayed with spline interpolation, so
+   * remote cursors glide instead of jumping between packets. Empty when
+   * hiding (name: null).
    */
-  x: number;
-  y: number;
+  points: CursorPoint[];
 }
 
 // ---- Server -> Client payloads ----
@@ -113,9 +125,8 @@ export interface CursorBroadcastPayload {
   id: string;
   /** top-level question name anchoring the cursor, or null when hidden */
   name: string | null;
-  /** fractions of the anchor question's border box; may be outside 0..1 */
-  x: number;
-  y: number;
+  /** sampled pointer path (see CursorPayload.points); empty when hidden */
+  points: CursorPoint[];
 }
 
 /** Events the client sends to the server. */

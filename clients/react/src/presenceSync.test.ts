@@ -3,6 +3,7 @@ import { Model } from "survey-core";
 import {
   attachPresence,
   BLUR_DEBOUNCE_MS,
+  CURSOR_BUFFER_MS,
   CURSOR_IDLE_MS,
   MOUSE_THROTTLE_MS,
   pageKey,
@@ -173,17 +174,49 @@ describe("attachPresence", () => {
     const moveMouse = (target: Element | Document, clientX: number, clientY: number) =>
       target.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX, clientY }));
 
-    it("throttles mousemove to a single trailing emit with fractional coords", () => {
+    it("throttles mousemove into a single trailing packet carrying the sampled path", () => {
       const { emit, projectName } = { ...attach(), ...setupDomRefs() };
 
       moveMouse(projectName, 150, 225);
-      moveMouse(projectName, 200, 250); // last one within the window wins
+      moveMouse(projectName, 200, 250);
       expect(emitsOf(emit, "cursor-moved")).toEqual([]);
 
       vi.advanceTimersByTime(MOUSE_THROTTLE_MS);
 
       expect(emitsOf(emit, "cursor-moved")).toEqual([
-        { roomId: "r1", name: "projectName", x: 0.25, y: 0.5 },
+        {
+          roomId: "r1",
+          name: "projectName",
+          points: [
+            { x: 0.125, y: 0.25, t: 0 },
+            { x: 0.25, y: 0.5, t: 0 },
+          ],
+        },
+      ]);
+    });
+
+    it("downsamples a busy window to at most 3 points with time offsets", () => {
+      const { emit, projectName } = { ...attach(), ...setupDomRefs() };
+
+      moveMouse(projectName, 150, 225); // t=0 (first)
+      vi.advanceTimersByTime(10);
+      moveMouse(projectName, 200, 225); // t=10 (mid of 4 samples)
+      vi.advanceTimersByTime(10);
+      moveMouse(projectName, 250, 225); // t=20 — dropped
+      vi.advanceTimersByTime(10);
+      moveMouse(projectName, 300, 225); // t=30 (last)
+      vi.advanceTimersByTime(MOUSE_THROTTLE_MS - 30);
+
+      expect(emitsOf(emit, "cursor-moved")).toEqual([
+        {
+          roomId: "r1",
+          name: "projectName",
+          points: [
+            { x: 0.125, y: 0.25, t: 0 },
+            { x: 0.25, y: 0.25, t: 10 },
+            { x: 0.5, y: 0.25, t: 30 },
+          ],
+        },
       ]);
     });
 
@@ -196,7 +229,7 @@ describe("attachPresence", () => {
       vi.advanceTimersByTime(MOUSE_THROTTLE_MS);
 
       expect(emitsOf(emit, "cursor-moved")).toEqual([
-        { roomId: "r1", name: "projectName", x: -0.125, y: -1.5 },
+        { roomId: "r1", name: "projectName", points: [{ x: -0.125, y: -1.5, t: 0 }] },
       ]);
     });
 
@@ -209,7 +242,7 @@ describe("attachPresence", () => {
       vi.advanceTimersByTime(MOUSE_THROTTLE_MS);
 
       expect(emitsOf(emit, "cursor-moved")).toEqual([
-        { roomId: "r1", name: "owner", x: 0.5, y: -0.05 },
+        { roomId: "r1", name: "owner", points: [{ x: 0.5, y: -0.05, t: 0 }] },
       ]);
     });
 
@@ -220,7 +253,7 @@ describe("attachPresence", () => {
       moveMouse(document.body, 5, 5);
       vi.advanceTimersByTime(MOUSE_THROTTLE_MS);
 
-      expect(emitsOf(emit, "cursor-moved")).toEqual([{ roomId: "r1", name: null, x: 0, y: 0 }]);
+      expect(emitsOf(emit, "cursor-moved")).toEqual([{ roomId: "r1", name: null, points: [] }]);
     });
 
     it("does not resend an identical position", () => {
@@ -270,7 +303,11 @@ describe("attachPresence", () => {
     it("positions the remote cursor within the anchored question rect", () => {
       const { receive } = attach();
 
-      receive("cursor-moved", { id: "peer-1", name: "projectName", x: 0.5, y: 0.5 });
+      receive("cursor-moved", {
+        id: "peer-1",
+        name: "projectName",
+        points: [{ x: 0.5, y: 0.5, t: 0 }],
+      });
 
       const cursor = document.querySelector<HTMLElement>(".collab-cursor")!;
       expect(cursor.style.display).toBe("block");
@@ -283,7 +320,11 @@ describe("attachPresence", () => {
     it("extrapolates the remote cursor outside the anchor rect for out-of-range fractions", () => {
       const { receive } = attach();
 
-      receive("cursor-moved", { id: "peer-1", name: "projectName", x: -0.125, y: -1.5 });
+      receive("cursor-moved", {
+        id: "peer-1",
+        name: "projectName",
+        points: [{ x: -0.125, y: -1.5, t: 0 }],
+      });
 
       const cursor = document.querySelector<HTMLElement>(".collab-cursor")!;
       expect(cursor.style.display).toBe("block");
@@ -291,11 +332,46 @@ describe("attachPresence", () => {
       expect(cursor.style.top).toBe("50px"); // 200 + (-1.5) * 100
     });
 
+    it("replays a multi-point path and settles on its last point", () => {
+      // Force the raf helper onto its setTimeout fallback so fake timers
+      // drive the replay animation frames.
+      vi.stubGlobal("requestAnimationFrame", undefined);
+      try {
+        const { receive } = attach();
+
+        receive("cursor-moved", {
+          id: "peer-1",
+          name: "projectName",
+          points: [
+            { x: 0, y: 0, t: 0 },
+            { x: 1, y: 1, t: 40 },
+          ],
+        });
+
+        // The replay starts at the first sample...
+        const cursor = document.querySelector<HTMLElement>(".collab-cursor")!;
+        expect(cursor.style.display).toBe("block");
+        expect(cursor.style.left).toBe("100px");
+        expect(cursor.style.top).toBe("200px");
+
+        // ...and holds the last one once the buffered clock passes it.
+        vi.advanceTimersByTime(CURSOR_BUFFER_MS + 100);
+        expect(cursor.style.left).toBe("500px"); // 100 + 1 * 400
+        expect(cursor.style.top).toBe("300px"); // 200 + 1 * 100
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
     it("hides the cursor on a null anchor", () => {
       const { receive } = attach();
-      receive("cursor-moved", { id: "peer-1", name: "projectName", x: 0.5, y: 0.5 });
+      receive("cursor-moved", {
+        id: "peer-1",
+        name: "projectName",
+        points: [{ x: 0.5, y: 0.5, t: 0 }],
+      });
 
-      receive("cursor-moved", { id: "peer-1", name: null, x: 0, y: 0 });
+      receive("cursor-moved", { id: "peer-1", name: null, points: [] });
 
       expect(document.querySelector<HTMLElement>(".collab-cursor")!.style.display).toBe("none");
     });
@@ -303,7 +379,11 @@ describe("attachPresence", () => {
     it("clears everything for a peer that left", () => {
       const { receive } = attach();
       receive("focus-question", { id: "peer-1", name: "projectName" });
-      receive("cursor-moved", { id: "peer-1", name: "projectName", x: 0.5, y: 0.5 });
+      receive("cursor-moved", {
+        id: "peer-1",
+        name: "projectName",
+        points: [{ x: 0.5, y: 0.5, t: 0 }],
+      });
 
       receive("participant-left", { id: "peer-1" });
 
@@ -448,7 +528,11 @@ describe("attachPresence", () => {
     it("falls back to the question under the peer's fresh cursor without focus", () => {
       const { survey, receive, goToParticipant } = attachMultipage();
       const { scrollIntoView } = addMembersNode();
-      receive("cursor-moved", { id: "peer-1", name: "members", x: 0.5, y: 0.5 });
+      receive("cursor-moved", {
+        id: "peer-1",
+        name: "members",
+        points: [{ x: 0.5, y: 0.5, t: 0 }],
+      });
 
       goToParticipant("peer-1");
 
@@ -459,7 +543,11 @@ describe("attachPresence", () => {
     it("ignores a stale cursor and switches to the peer's page without scrolling", () => {
       const { survey, receive, goToParticipant } = attachMultipage();
       const { scrollIntoView } = addMembersNode();
-      receive("cursor-moved", { id: "peer-1", name: "members", x: 0.5, y: 0.5 });
+      receive("cursor-moved", {
+        id: "peer-1",
+        name: "members",
+        points: [{ x: 0.5, y: 0.5, t: 0 }],
+      });
       receive("page-changed", { id: "peer-1", name: "team" });
       vi.advanceTimersByTime(CURSOR_IDLE_MS + 1000);
 

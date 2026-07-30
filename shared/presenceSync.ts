@@ -2,6 +2,7 @@ import type { Model, PageModel } from "survey-core";
 import type {
   CursorBroadcastPayload,
   CursorPayload,
+  CursorPoint,
   FocusBroadcastPayload,
   FocusPayload,
   PageBroadcastPayload,
@@ -15,6 +16,14 @@ import type {
 
 /** Mouse updates are throttled to this interval (trailing edge). */
 export const MOUSE_THROTTLE_MS = 50;
+/** Max path samples per cursor packet (window downsampled to first/mid/last). */
+export const CURSOR_MAX_POINTS = 3;
+/**
+ * Remote cursors replay the received path this far behind real time, so
+ * there is always a buffered segment ahead to interpolate through — motion
+ * stays smooth despite network jitter and dropped volatile packets.
+ */
+export const CURSOR_BUFFER_MS = 100;
 /** How long after a focusout before the focus is reported as cleared. */
 export const BLUR_DEBOUNCE_MS = 300;
 /** Safety repaint interval for DOM changes no observer caught. */
@@ -60,8 +69,13 @@ interface PeerState {
   focus: string | null;
   /** survey page the peer is on (see `pageKey`), or null when unknown */
   page: string | null;
-  cursor: { name: string; x: number; y: number } | null;
-  /** timestamp of the last cursor update, for the idle fade */
+  /**
+   * Cursor replay path: fractions relative to the named anchor question,
+   * scheduled at absolute local timestamps (`at`). Rendered CURSOR_BUFFER_MS
+   * behind real time; the last sample is held until newer packets arrive.
+   */
+  path: { name: string; x: number; y: number; at: number }[];
+  /** timestamp of the last cursor packet, for the idle fade */
   cursorAt: number;
 }
 
@@ -118,13 +132,16 @@ export const resolvePage = (survey: Model, key: string): PageModel | null => {
  *   debounced document `focusout` (survey-core has no blur event). Remote focus
  *   is drawn natively — a `data-collab-focus` attribute plus a peer-color CSS
  *   variable on the question root — so it scrolls and clips for free.
- * - Cursor: throttled document `mousemove` anchored to the outermost
- *   `[data-name]` question root as fractions of its rect, so positions
- *   converge across differently sized windows. When the pointer is not over
- *   a question (page gaps, headers, the app chrome) it anchors to the NEAREST
- *   question rect instead, with fractions extrapolated outside 0..1 — the
- *   cursor stays visible everywhere in the window. Rendered as an SVG arrow +
- *   name pill in a fixed pointer-transparent layer.
+ * - Cursor: document `mousemove` samples are batched per throttle window (up
+ *   to CURSOR_MAX_POINTS per packet, with ms offsets) and anchored to the
+ *   outermost `[data-name]` question root as fractions of its rect, so
+ *   positions converge across differently sized windows. When the pointer is
+ *   not over a question (page gaps, headers, the app chrome) it anchors to
+ *   the NEAREST question rect instead, with fractions extrapolated outside
+ *   0..1 — the cursor stays visible everywhere in the window. Receivers
+ *   replay the path CURSOR_BUFFER_MS behind real time, interpolating with a
+ *   Catmull-Rom spline, so remote cursors glide instead of jumping. Rendered
+ *   as an SVG arrow + name pill in a fixed pointer-transparent layer.
  *
  * Also tracks which survey page each participant is on (`page-changed`,
  * mirroring the focus pattern) and exposes `goToParticipant` so hosts (e.g.
@@ -153,7 +170,7 @@ export function attachPresence({
   const ensurePeer = (id: string): PeerState => {
     let peer = peers.get(id);
     if (!peer) {
-      peer = { focus: null, page: null, cursor: null, cursorAt: 0 };
+      peer = { focus: null, page: null, path: [], cursorAt: 0 };
       peers.set(id, peer);
     }
     return peer;
@@ -213,6 +230,46 @@ export function attachPresence({
     el.style.display = "none";
   };
 
+  /** A path sample projected to viewport px via its anchor question's rect. */
+  const toPx = (p: { name: string; x: number; y: number }) => {
+    const node = findQuestionNode(p.name);
+    const r = node?.getBoundingClientRect();
+    if (!r || r.width === 0 || r.height === 0) return null;
+    return { x: r.left + p.x * r.width, y: r.top + p.y * r.height };
+  };
+
+  /** Uniform Catmull-Rom for one coordinate, u in 0..1 between p1 and p2. */
+  const catmullRom = (p0: number, p1: number, p2: number, p3: number, u: number) =>
+    0.5 *
+    (2 * p1 +
+      (p2 - p0) * u +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u +
+      (3 * (p1 - p2) + p3 - p0) * u * u * u);
+
+  /**
+   * Position on the replay path at `now - CURSOR_BUFFER_MS`: a Catmull-Rom
+   * spline through the surrounding samples, computed in viewport px so
+   * segments spanning different anchor questions stay smooth. Not yet
+   * started -> first sample; caught up -> the last one is held. Null when
+   * the needed anchors are not rendered locally (peer on another page).
+   */
+  const cursorPosition = (path: PeerState["path"], now: number) => {
+    const T = now - CURSOR_BUFFER_MS;
+    const j = path.findIndex((p) => p.at > T);
+    if (j === -1) return toPx(path[path.length - 1]);
+    if (j === 0) return toPx(path[0]);
+    const a = toPx(path[j - 1]);
+    const b = toPx(path[j]);
+    if (!a || !b) return a ?? b;
+    const p0 = (path[j - 2] && toPx(path[j - 2])) ?? a;
+    const p3 = (path[j + 1] && toPx(path[j + 1])) ?? b;
+    const u = (T - path[j - 1].at) / (path[j].at - path[j - 1].at || 1);
+    return {
+      x: catmullRom(p0.x, a.x, b.x, p3.x, u),
+      y: catmullRom(p0.y, a.y, b.y, p3.y, u),
+    };
+  };
+
   // ---- render: reconcile decorations + position overlay artifacts ----
   const render = () => {
     if (disposed) return;
@@ -260,19 +317,16 @@ export function attachPresence({
         hide(a.badge);
       }
 
-      // Cursor arrow + name pill, re-anchored to the question rect.
-      const cur = peer.cursor;
-      const node = cur && now - peer.cursorAt < CURSOR_IDLE_MS ? findQuestionNode(cur.name) : null;
-      const rect = node?.getBoundingClientRect();
-      if (cur && rect && rect.width > 0 && rect.height > 0) {
+      // Cursor arrow + name pill, replayed along the buffered path.
+      const fresh = peer.path.length > 0 && now - peer.cursorAt < CURSOR_IDLE_MS;
+      const pos = fresh ? cursorPosition(peer.path, now) : null;
+      if (pos) {
         const color = participant?.color ?? "#888";
-        const x = rect.left + cur.x * rect.width;
-        const y = rect.top + cur.y * rect.height;
         a.cursor.querySelector("path")?.setAttribute("fill", color);
-        place(a.cursor, x, y);
+        place(a.cursor, pos.x, pos.y);
         a.cursorName.textContent = participant?.name ?? "";
         a.cursorName.style.background = color;
-        place(a.cursorName, x + 12, y + 16);
+        place(a.cursorName, pos.x + 12, pos.y + 16);
       } else {
         hide(a.cursor);
         hide(a.cursorName);
@@ -294,6 +348,28 @@ export function attachPresence({
       refreshScheduled = false;
       render();
     });
+  };
+
+  // Path replay animation: rAF frames run while any peer's path still has
+  // samples ahead of the replay clock, then the loop stops itself.
+  let animating = false;
+  const animate = () => {
+    animating = false;
+    if (disposed) return;
+    render();
+    const now = Date.now();
+    for (const peer of peers.values()) {
+      const last = peer.path[peer.path.length - 1];
+      if (last && last.at > now - CURSOR_BUFFER_MS) {
+        ensureAnimating();
+        return;
+      }
+    }
+  };
+  const ensureAnimating = () => {
+    if (animating || disposed) return;
+    animating = true;
+    raf(animate);
   };
 
   // ---- outgoing: focused question ----
@@ -357,11 +433,11 @@ export function attachPresence({
     (socket.volatile ?? socket).emit("cursor-moved", payload);
 
   let lastCurKey = "";
-  const sendCursor = (name: string | null, x: number, y: number) => {
-    const key = `${name}|${x}|${y}`;
+  const sendCursor = (name: string | null, points: CursorPoint[]) => {
+    const key = `${name}|${JSON.stringify(points)}`;
     if (key === lastCurKey) return;
     lastCurKey = key;
-    emitCursor({ roomId, name, x, y });
+    emitCursor({ roomId, name, points });
   };
 
   // Top-level question roots: nested [data-name] cells (composite/matrix)
@@ -391,8 +467,9 @@ export function attachPresence({
     return { anchor, rect };
   };
 
-  const captureMouse = (ev: MouseEvent) => {
-    // Anchor to the OUTERMOST [data-name] ancestor (see onFocusInQuestion).
+  const captureMouse = (ev: MouseEvent, samples: { x: number; y: number; time: number }[]) => {
+    // Anchor to the OUTERMOST [data-name] ancestor of the LAST event (see
+    // onFocusInQuestion); the whole window's path shares this one anchor.
     let anchor = (ev.target as Element | null)?.closest?.("[data-name]") ?? null;
     for (
       let outer = anchor?.parentElement?.closest("[data-name]");
@@ -409,28 +486,48 @@ export function attachPresence({
     }
     if (!anchor || !rect) {
       // No questions rendered at all (e.g. completion page) — hide.
-      sendCursor(null, 0, 0);
+      sendCursor(null, []);
       return;
     }
+    // Downsample the window to first/mid/last — enough for the receiver's
+    // spline to reproduce the curve without inflating the packet.
+    const picks =
+      samples.length <= CURSOR_MAX_POINTS
+        ? samples
+        : [samples[0], samples[Math.floor((samples.length - 1) / 2)], samples[samples.length - 1]];
+    const t0 = picks[0].time;
+    const r = rect;
     sendCursor(
       anchor.getAttribute("data-name"),
-      round3((ev.clientX - rect.left) / rect.width),
-      round3((ev.clientY - rect.top) / rect.height),
+      picks.map((s) => ({
+        x: round3((s.x - r.left) / r.width),
+        y: round3((s.y - r.top) / r.height),
+        t: Math.max(0, Math.round(s.time - t0)),
+      })),
     );
   };
 
   let pendingMouse: MouseEvent | null = null;
+  let pendingSamples: { x: number; y: number; time: number }[] = [];
   let mouseTimer: ReturnType<typeof setTimeout> | undefined;
   const onMouseMove = (ev: MouseEvent) => {
     pendingMouse = ev;
+    pendingSamples.push({ x: ev.clientX, y: ev.clientY, time: Date.now() });
     if (mouseTimer !== undefined) return;
     mouseTimer = setTimeout(() => {
       mouseTimer = undefined;
-      if (!disposed && pendingMouse) captureMouse(pendingMouse);
+      if (!disposed && pendingMouse) captureMouse(pendingMouse, pendingSamples);
       pendingMouse = null;
+      pendingSamples = [];
     }, MOUSE_THROTTLE_MS);
   };
-  const hideCursor = () => sendCursor(null, 0, 0);
+  const hideCursor = () => {
+    // Drop any half-collected window so a pending flush can't resurrect the
+    // cursor right after the hide.
+    pendingMouse = null;
+    pendingSamples = [];
+    sendCursor(null, []);
+  };
   const onMouseLeave = () => hideCursor();
   const onVisibility = () => {
     if (doc.visibilityState === "hidden") hideCursor();
@@ -445,11 +542,32 @@ export function attachPresence({
     // Nothing rendered depends on the page, so no render() here.
     ensurePeer(id).page = name;
   };
-  const onRemoteCursor = ({ id, name, x, y }: CursorBroadcastPayload) => {
+  const onRemoteCursor = ({ id, name, points }: CursorBroadcastPayload) => {
     const peer = ensurePeer(id);
-    peer.cursor = name ? { name, x, y } : null;
-    peer.cursorAt = Date.now();
+    const now = Date.now();
+    peer.cursorAt = now;
+    // points?. — a stale pre-path client tab may still emit the old
+    // single-point payload; treat it as a hide instead of crashing.
+    if (!name || !points?.length) {
+      peer.path = [];
+    } else {
+      // Schedule the samples on the local clock; the replay runs
+      // CURSOR_BUFFER_MS behind, so they are still ahead of it. Timestamps
+      // are kept strictly increasing across packets (a new packet may arrive
+      // before the previous one finished playing).
+      let prevAt = peer.path[peer.path.length - 1]?.at ?? 0;
+      for (const p of points) {
+        const at = Math.max(now + p.t, prevAt + 1);
+        peer.path.push({ name, x: p.x, y: p.y, at });
+        prevAt = at;
+      }
+      // Drop samples the replay clock has left far behind (keep the last —
+      // it holds the resting position).
+      const cutoff = now - CURSOR_BUFFER_MS * 4;
+      while (peer.path.length > 1 && peer.path[1].at < cutoff) peer.path.shift();
+    }
     render();
+    ensureAnimating();
   };
   const onParticipantLeft = ({ id }: { id: string }) => {
     peers.delete(id);
@@ -484,8 +602,9 @@ export function attachPresence({
   const goToParticipant = (id: string) => {
     const peer = peers.get(id);
     if (!peer) return;
-    const cursorFresh = peer.cursor && Date.now() - peer.cursorAt < CURSOR_IDLE_MS;
-    const target = peer.focus ?? (cursorFresh ? peer.cursor!.name : null);
+    const lastSample = peer.path[peer.path.length - 1];
+    const cursorFresh = lastSample && Date.now() - peer.cursorAt < CURSOR_IDLE_MS;
+    const target = peer.focus ?? (cursorFresh ? lastSample.name : null);
     if (target) {
       const question = survey.getQuestionByName(target);
       const page = question?.isVisible ? ((question.page as PageModel | null) ?? null) : null;

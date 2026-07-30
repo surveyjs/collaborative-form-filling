@@ -47,8 +47,8 @@ function startServer(): Promise<{ http: HttpServer; port: number }> {
       rooms.setPage(roomId, socket.id, name);
       socket.to(roomId).emit("page-changed", { id: socket.id, name });
     });
-    socket.on("cursor-moved", ({ roomId, name, x, y }) => {
-      socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, x, y });
+    socket.on("cursor-moved", ({ roomId, name, points }) => {
+      socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, points });
     });
     socket.on("disconnect", () => {
       const left = rooms.leave(socket.id);
@@ -218,10 +218,24 @@ describe("socket handlers", () => {
     });
 
     const received = once<CursorBroadcastPayload>(b, "cursor-moved");
-    a.emit("cursor-moved", { roomId: "r1", name: "projectName", x: 0.25, y: 0.75 });
+    a.emit("cursor-moved", {
+      roomId: "r1",
+      name: "projectName",
+      points: [
+        { x: 0.25, y: 0.75, t: 0 },
+        { x: 0.3, y: 0.8, t: 16 },
+      ],
+    });
 
     const payload = await received;
-    expect(payload).toEqual({ id: stateA.selfId, name: "projectName", x: 0.25, y: 0.75 });
+    expect(payload).toEqual({
+      id: stateA.selfId,
+      name: "projectName",
+      points: [
+        { x: 0.25, y: 0.75, t: 0 },
+        { x: 0.3, y: 0.8, t: 16 },
+      ],
+    });
     expect(echoed).toBe(false);
 
     a.close();
