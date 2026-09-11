@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Model, type QuestionMatrixDynamicModel } from "survey-core";
-import { attachSurveySync, type SyncSocket } from "../../../shared/sync";
+import { attachSurveySync, MAX_VALUE_CHARS, type SyncSocket } from "../../../shared/sync";
 import type { ValueChangedPayload } from "../../../shared/events";
 
 const SURVEY_JSON = {
@@ -273,7 +273,9 @@ describe("attachSurveySync: comments", () => {
 });
 
 describe("attachSurveySync: oversized values", () => {
-  const LIMIT = 1024 * 1024;
+  // Read from the module rather than restated here: the limit moves with the
+  // file-question base64 ceiling, and a local copy would quietly go stale.
+  const LIMIT = MAX_VALUE_CHARS;
 
   it("refuses a value over the limit and reports it on the question", () => {
     const survey = new Model(SURVEY_JSON);

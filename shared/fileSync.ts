@@ -1,37 +1,53 @@
 import type { Model, Question } from "survey-core";
 
 /**
- * File storage for collaborative file questions.
+ * File upload for collaborative file questions.
  *
- * Only a URL travels between peers: the browser that picked the file uploads
- * it here, and the question's value becomes `[{ name, type, content: <url> }]`
- * — a few dozen bytes that ride the normal `value-changed` path in ./sync.
- * Keeping the bytes in the value instead (survey-core's `storeDataAsText`
- * default) pushes a base64 copy of every file through the socket, into the
- * room snapshot, and back out to every late joiner; see normalizeFileQuestion.
+ * survey-core offers two storage modes and the schema picks, not this module:
  *
- * The SurveyJS demo service is the MVP backend — its uploads are temporary, so
- * links in a long-lived room eventually go stale. It is the only part of the
- * app that knows where files live, so swapping in an endpoint on our own
- * Express server touches this block alone.
+ * - `storeDataAsText: true` (survey-core's default) — the file is read with
+ *   FileReader and its base64 IS the question's value. `onUploadFiles` never
+ *   fires, nothing here participates, and the bytes ride the socket and sit in
+ *   the room snapshot. The limits in ./sync are what keep that survivable.
+ * - `storeDataAsText: false` — survey-core raises `onUploadFiles`, we upload to
+ *   our own endpoint and the value holds only `{name, type, content: <url>}`,
+ *   a few dozen bytes regardless of file size.
+ *
+ * Whichever the author chose is what ends up in the survey results, so this
+ * module does not override it: forcing one mode would silently change the data
+ * a schema was written to collect.
+ *
+ * Storage is the Express server that already serves this app, so every URL
+ * below is root-relative — same origin, no host to hard-code, nothing to get
+ * wrong behind a proxy.
  */
-const UPLOAD_URL = "https://api.surveyjs.io/private/Surveys/uploadTempFiles";
-const FILE_URL = "https://api.surveyjs.io/private/Surveys/getTempFile?name=";
-const DELETE_URL = "https://api.surveyjs.io/private/Surveys/deleteTempFile?name=";
+const FILES_PATH_PREFIX = "/api/rooms/";
+
+function uploadUrl(roomId: string, fileName: string): string {
+  return (
+    FILES_PATH_PREFIX +
+    encodeURIComponent(roomId) +
+    "/files?name=" +
+    encodeURIComponent(fileName)
+  );
+}
+
+/** True for URLs this module produced, i.e. files it is responsible for. */
+function isStoredRemotely(content: string): boolean {
+  return typeof content === "string" && content.indexOf(FILES_PATH_PREFIX) === 0;
+}
 
 /**
- * Per-file ceiling forced onto every file question, whatever the schema says.
+ * Per-file ceiling applied to every file question, whatever the schema says.
  *
  * A room's schema is arbitrary JSON pasted by whoever created the room, so the
  * app cannot rely on the author setting `maxSize` (survey-core's default is 0,
- * meaning unlimited). Without a cap the only feedback on an oversized file is
- * a dropped socket; with one, survey-core rejects it in `allFilesOk` with a
- * visible ExceedSizeError before anything is sent.
+ * meaning unlimited). This does not change the shape of the results — only the
+ * validation boundary — but without it a `storeDataAsText: true` question
+ * would read a file of any size into memory before anything noticed. Mirrored
+ * by MAX_FILE_BYTES in server/src/fileRoutes.ts; keep the two in sync.
  */
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
-
-/** Question types that inherit `storeDataAsText` from QuestionFileModelBase. */
-const FILE_QUESTION_TYPES = ["file", "signaturepad"];
 
 /** One entry of a file question's value, as survey-core stores it. */
 interface StoredFile {
@@ -41,55 +57,49 @@ interface StoredFile {
 }
 
 /**
- * Forces a file/signature question onto the URL-based transport.
+ * Clamps a file question's `maxSize`.
  *
- * `storeDataAsText` is overridden even when the schema sets it explicitly:
- * base64-in-value is not a viable transport for a collaborative room, so this
- * is the app's call, not the schema author's. Note that the override makes an
- * `onUploadFiles` handler mandatory — without one survey-core answers every
- * upload with `noUploadFilesHandler` — which is why this lives next to
- * attachFileSync and the two are wired together.
- *
- * `maxSize` exists on the file question only (a signature is drawn, not
- * picked), and a stricter value from the schema is left alone.
+ * Deliberately leaves `storeDataAsText` alone — see the module comment. Only
+ * the file question has `maxSize` (a signature is drawn, not picked), and a
+ * stricter value from the schema is respected.
  */
 export function normalizeFileQuestion(question: Question): void {
-  const type = question.getType();
-  if (FILE_QUESTION_TYPES.indexOf(type) < 0) return;
-  const q = question as Question & { storeDataAsText: boolean; maxSize?: number };
-  q.storeDataAsText = false;
-  if (type !== "file") return;
+  if (question.getType() !== "file") return;
+  const q = question as Question & { maxSize?: number };
   const maxSize = q.maxSize;
   if (!maxSize || maxSize <= 0 || maxSize > MAX_FILE_BYTES) q.maxSize = MAX_FILE_BYTES;
 }
 
 /**
- * Uploads one batch and returns a storage URL per file, in the input order.
+ * Uploads one file as a raw request body and returns its URL.
  *
- * The multipart FIELD name is the key the storage answers with, so it must be
- * unique per part: keying by `file.name` collapses two files picked under the
- * same name into a single part, and the response can no longer be mapped back
- * onto the files. The index prefix keeps the parts distinct.
+ * One request per file, rather than one multipart request per batch: the
+ * server then needs no multipart parser (express.raw covers it, and enforces
+ * the size limit on its own), and two files picked under the SAME NAME cannot
+ * collide, which a field-name-keyed multipart response could not avoid.
  */
-async function uploadToStorage(files: File[]): Promise<string[]> {
-  const form = new FormData();
-  const keys = files.map((file, index) => {
-    const key = index + "-" + file.name;
-    form.append(key, file);
-    return key;
+async function uploadToStorage(roomId: string, file: File): Promise<string> {
+  const response = await fetch(uploadUrl(roomId, file.name), {
+    method: "POST",
+    headers: { "content-type": file.type || "application/octet-stream" },
+    body: file,
   });
-  const response = await fetch(UPLOAD_URL, { method: "POST", body: form });
   if (!response.ok) throw new Error("upload failed with status " + response.status);
-  const uploaded = (await response.json()) as Record<string, string>;
-  return keys.map((key) => FILE_URL + uploaded[key]);
+  const stored = (await response.json()) as { url: string };
+  if (!stored || !stored.url) throw new Error("upload response had no url");
+  return stored.url;
 }
 
 /** Deletes one stored file. Returns false on any failure, never throws. */
 async function deleteFromStorage(content: string): Promise<boolean> {
+  // `onClearFiles` is NOT gated by storeDataAsText the way `onUploadFiles` is:
+  // it fires in both modes. In the base64 mode `content` is a `data:` URL and
+  // there is nothing on any server to remove — the file lives inside the value
+  // and goes away with it. Reporting success is correct; issuing a request
+  // would be pure noise.
+  if (!isStoredRemotely(content)) return true;
   try {
-    const name = new URL(content).searchParams.get("name");
-    if (!name) return false;
-    const response = await fetch(DELETE_URL + encodeURIComponent(name), { method: "DELETE" });
+    const response = await fetch(content, { method: "DELETE" });
     return response.status === 200;
   } catch (error) {
     console.error("[fileSync] failed to delete a file from storage", error);
@@ -99,26 +109,31 @@ async function deleteFromStorage(content: string): Promise<boolean> {
 
 export interface AttachFileSyncOptions {
   survey: Model;
+  roomId: string;
 }
 
 /**
  * Makes file questions work in a shared room, independently of the schema.
  *
- * Normalization runs in two places because neither covers the other's case:
- * the `getAllQuestions` walk catches everything built by the `new Model(json)`
- * constructor (it recurses into static panels), while `onQuestionCreated` —
- * raised from `Question.setSurveyImpl`, so once per question ever created —
- * catches matrixdynamic cells and dynamic-panel questions that only appear
- * once a row is added. `includeNested` is deliberately NOT used on the walk:
- * it calls `page.onFirstRendering()`, forcing a first render that defeats
- * `lazyRenderEnabled`, and the subscription already covers those questions.
+ * The `maxSize` clamp runs in two places because neither covers the other's
+ * case: the `getAllQuestions` walk catches everything built by the
+ * `new Model(json)` constructor (it recurses into static panels), while
+ * `onQuestionCreated` — raised from `Question.setSurveyImpl`, so once per
+ * question ever created — catches matrixdynamic cells and dynamic-panel
+ * questions that only appear once a row is added. `includeNested` is
+ * deliberately NOT used on the walk: it calls `page.onFirstRendering()`,
+ * forcing a first render that defeats `lazyRenderEnabled`, and the
+ * subscription already covers those questions.
  *
- * Must be attached BEFORE the room snapshot is assigned to `survey.data`, so
- * incoming values land on questions that are already normalized.
+ * Both handlers are registered unconditionally. A question left on
+ * `storeDataAsText: true` simply never raises `onUploadFiles`, so there is no
+ * need to branch on the mode anywhere.
+ *
+ * Must be attached BEFORE the room snapshot is assigned to `survey.data`.
  *
  * Returns a detach function that removes all listeners.
  */
-export function attachFileSync({ survey }: AttachFileSyncOptions): () => void {
+export function attachFileSync({ survey, roomId }: AttachFileSyncOptions): () => void {
   survey.getAllQuestions().forEach(normalizeFileQuestion);
 
   const onQuestionCreated = (_sender: Model, options: { question: Question }) =>
@@ -128,7 +143,7 @@ export function attachFileSync({ survey }: AttachFileSyncOptions): () => void {
     _sender: Model,
     options: { files: File[]; callback: (data: unknown, errors?: unknown) => void },
   ) => {
-    uploadToStorage(options.files)
+    Promise.all(options.files.map((file) => uploadToStorage(roomId, file)))
       .then((urls) =>
         options.callback(
           options.files.map((file, index) => ({ file: file, content: urls[index] })),
@@ -144,7 +159,7 @@ export function attachFileSync({ survey }: AttachFileSyncOptions): () => void {
 
   // Fires only on the participant who removed the file. Peers receive the
   // already-filtered value through `value-changed`, and `survey.setValue` does
-  // not raise this event — so the file is deleted from storage exactly once.
+  // not raise this event — so a stored file is deleted exactly once.
   const onClearFiles = (
     _sender: Model,
     options: {

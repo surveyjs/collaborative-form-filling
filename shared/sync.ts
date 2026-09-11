@@ -16,22 +16,34 @@ export interface SyncSocket {
  * Ceiling on one question's serialized value, mirrored by the server's own
  * check in server/src/index.ts — keep the two in sync.
  *
- * Both sit well under the socket's `maxHttpBufferSize`, because exceeding THAT
- * is not a recoverable error: engine.io refuses the oversized frame and closes
+ * It sits under the socket's `maxHttpBufferSize`, because exceeding THAT is
+ * not a recoverable error: engine.io refuses the oversized frame and closes
  * the connection (ws code 1009), which surfaces as the form quietly losing
  * sync with nothing said. Refusing the value here keeps the connection alive
  * and puts a message on the question instead.
  *
- * This is the one guard a room schema cannot sidestep. File questions are
- * normally kept small by ./fileSync (only a URL is stored), but a custom
- * component wrapping a file input, or any question type we do not know about,
- * bypasses that and lands here.
+ * It is also the real ceiling of the `storeDataAsText: true` mode, where a
+ * file question's value holds the file's own base64. Hence the chain the three
+ * limits form, which must keep its order:
+ *
+ *   MAX_FILE_BYTES x 4/3  <  MAX_VALUE_CHARS  <  maxHttpBufferSize
+ *         13.4 MiB        <      16 MiB       <      20 MiB
+ *
+ * Note what this bounds in that mode: the value of a file question is an
+ * ARRAY, so with `allowMultiple` every file of that question travels in one
+ * packet. The cap is therefore per QUESTION, not per file — roughly 12 MiB of
+ * originals in total. That is survey-core's data model, not a choice here.
+ *
+ * This is also the one guard a room schema cannot sidestep, which is why it
+ * stays even though ./fileSync clamps `maxSize`: a custom component wrapping a
+ * file input, or a question type we do not know about, bypasses the clamp and
+ * lands here.
  *
  * Measured in UTF-16 units rather than bytes: exact for the base64 and ASCII
  * payloads that actually approach the limit, and cheap enough to run on every
  * keystroke.
  */
-export const MAX_VALUE_CHARS = 1024 * 1024;
+export const MAX_VALUE_CHARS = 16 * 1024 * 1024;
 
 export interface AttachSyncOptions {
   survey: Model;

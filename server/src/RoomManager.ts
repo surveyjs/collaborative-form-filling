@@ -1,6 +1,14 @@
 import type { Participant, SurveyData } from "../../shared/events.js";
 import { defaultSurvey } from "./defaultSurvey.js";
 
+/**
+ * URL-safe room ids (they become a path/query segment and a socket room).
+ * Lives here rather than in index.ts because FileStore and the file routes
+ * need it too — and for them it doubles as the path-traversal guard, since it
+ * admits neither "." nor "/".
+ */
+export const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
 export interface Room {
   surveyJson: object;
   data: SurveyData;

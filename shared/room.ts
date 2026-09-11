@@ -56,7 +56,7 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
     // Before `model.data`: file questions must already be normalized onto the
     // URL-based transport by the time the room snapshot lands on them.
     detachFiles?.();
-    detachFiles = attachFileSync({ survey: model });
+    detachFiles = attachFileSync({ survey: model, roomId });
 
     model.data = state.data;
 

@@ -1,36 +1,61 @@
-import { describe, expect, it } from "vitest";
-import { Model, type QuestionMatrixDynamicModel } from "survey-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Model, type QuestionFileModel, type QuestionMatrixDynamicModel } from "survey-core";
 import { attachFileSync, MAX_FILE_BYTES } from "../../../shared/fileSync";
 
 /**
- * A room's schema is arbitrary JSON pasted by whoever created the room, so
- * none of these tests may rely on the schema opting in: every expectation
- * below is about what the app forces onto the question regardless.
+ * A room's schema is arbitrary JSON pasted by whoever created the room, so the
+ * app cannot assume anything is set in it. What it must NOT do either is
+ * override what IS set: `storeDataAsText` decides whether the survey results
+ * hold the file itself or a link to it, and that is the schema author's call.
  */
 
-/** Reads the two properties the normalization owns. */
+/** The two properties this module has an opinion about, or deliberately none. */
 function fileProps(question: unknown) {
-  const q = question as { storeDataAsText: boolean; maxSize?: number };
+  const q = question as { storeDataAsText?: boolean; maxSize?: number };
   return { storeDataAsText: q.storeDataAsText, maxSize: q.maxSize };
 }
 
-describe("attachFileSync: normalization", () => {
-  it("puts a bare file question on the URL transport with a size cap", () => {
-    const survey = new Model({ elements: [{ type: "file", name: "files" }] });
-    attachFileSync({ survey });
+function png(name: string): File {
+  return new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
+}
 
-    // Left alone, survey-core would base64 the whole file into the value.
+/** Resolves once survey-core has written the upload result into the value. */
+function fileOf(survey: Model, name: string): QuestionFileModel {
+  return survey.getQuestionByName(name) as QuestionFileModel;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("attachFileSync: normalization", () => {
+  it("clamps an absent maxSize without touching storeDataAsText", () => {
+    const survey = new Model({ elements: [{ type: "file", name: "files" }] });
+    attachFileSync({ survey, roomId: "r1" });
+
+    // storeDataAsText stays at survey-core's own default — the app has no
+    // business changing what the results will contain.
     expect(fileProps(survey.getQuestionByName("files"))).toEqual({
-      storeDataAsText: false,
+      storeDataAsText: true,
       maxSize: MAX_FILE_BYTES,
     });
   });
 
-  it("overrides storeDataAsText even when the schema sets it explicitly", () => {
+  it("leaves an explicit storeDataAsText: true alone", () => {
     const survey = new Model({
       elements: [{ type: "file", name: "files", storeDataAsText: true }],
     });
-    attachFileSync({ survey });
+    attachFileSync({ survey, roomId: "r1" });
+
+    expect(fileProps(survey.getQuestionByName("files")).storeDataAsText).toBe(true);
+  });
+
+  it("leaves an explicit storeDataAsText: false alone", () => {
+    const survey = new Model({
+      elements: [{ type: "file", name: "files", storeDataAsText: false }],
+    });
+    attachFileSync({ survey, roomId: "r1" });
 
     expect(fileProps(survey.getQuestionByName("files")).storeDataAsText).toBe(false);
   });
@@ -39,7 +64,7 @@ describe("attachFileSync: normalization", () => {
     const survey = new Model({
       elements: [{ type: "file", name: "files", maxSize: 102400 }],
     });
-    attachFileSync({ survey });
+    attachFileSync({ survey, roomId: "r1" });
 
     expect(fileProps(survey.getQuestionByName("files")).maxSize).toBe(102400);
   });
@@ -50,18 +75,9 @@ describe("attachFileSync: normalization", () => {
         { type: "panel", name: "docs", elements: [{ type: "file", name: "files" }] },
       ],
     });
-    attachFileSync({ survey });
+    attachFileSync({ survey, roomId: "r1" });
 
-    expect(fileProps(survey.getQuestionByName("files")).storeDataAsText).toBe(false);
-  });
-
-  it("normalizes a signature pad, which has no maxSize of its own", () => {
-    const survey = new Model({ elements: [{ type: "signaturepad", name: "sign" }] });
-    attachFileSync({ survey });
-
-    const props = fileProps(survey.getQuestionByName("sign"));
-    expect(props.storeDataAsText).toBe(false);
-    expect(props.maxSize).toBeUndefined();
+    expect(fileProps(survey.getQuestionByName("files")).maxSize).toBe(MAX_FILE_BYTES);
   });
 
   it("normalizes a matrix cell created after the model was built", () => {
@@ -75,20 +91,20 @@ describe("attachFileSync: normalization", () => {
         },
       ],
     });
-    attachFileSync({ survey });
+    attachFileSync({ survey, roomId: "r1" });
 
-    // The row does not exist yet at attach time, so the one-off walk over
-    // getAllQuestions cannot reach this question — onQuestionCreated does.
+    // The row does not exist at attach time, so the one-off getAllQuestions
+    // walk cannot reach this question — onQuestionCreated does.
     const matrix = survey.getQuestionByName("docs") as QuestionMatrixDynamicModel;
     matrix.addRow();
     const cell = matrix.visibleRows[0].getQuestionByName("scan");
 
-    expect(fileProps(cell)).toEqual({ storeDataAsText: false, maxSize: MAX_FILE_BYTES });
+    expect(fileProps(cell).maxSize).toBe(MAX_FILE_BYTES);
   });
 
   it("leaves other question types alone", () => {
     const survey = new Model({ elements: [{ type: "text", name: "projectName" }] });
-    attachFileSync({ survey });
+    attachFileSync({ survey, roomId: "r1" });
 
     expect(fileProps(survey.getQuestionByName("projectName"))).toEqual({
       storeDataAsText: undefined,
@@ -107,13 +123,154 @@ describe("attachFileSync: normalization", () => {
         },
       ],
     });
-    const detach = attachFileSync({ survey });
+    const detach = attachFileSync({ survey, roomId: "r1" });
     detach();
 
     const matrix = survey.getQuestionByName("docs") as QuestionMatrixDynamicModel;
     matrix.addRow();
-    const cell = matrix.visibleRows[0].getQuestionByName("scan");
 
-    expect(fileProps(cell).storeDataAsText).toBe(true);
+    expect(fileProps(matrix.visibleRows[0].getQuestionByName("scan")).maxSize).toBe(0);
+  });
+});
+
+/**
+ * Both modes in ONE model. Two separate single-question tests would not catch
+ * the thing most likely to go wrong: the handlers are attached to the survey
+ * while `storeDataAsText` lives on the question, so a per-model shortcut would
+ * pass those and fail here.
+ */
+describe("attachFileSync: both storage modes in one survey", () => {
+  const BOTH_MODES = {
+    elements: [
+      { type: "file", name: "filesInline", storeDataAsText: true },
+      { type: "file", name: "filesUrl", storeDataAsText: false },
+    ],
+  };
+
+  function stubUpload() {
+    let next = 0;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 201,
+      json: async () => ({ url: `/api/rooms/r1/files/id-${next++}` }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("keeps each question on the mode its own schema asked for", () => {
+    const survey = new Model(BOTH_MODES);
+    attachFileSync({ survey, roomId: "r1" });
+
+    expect(fileProps(survey.getQuestionByName("filesInline"))).toEqual({
+      storeDataAsText: true,
+      maxSize: MAX_FILE_BYTES,
+    });
+    expect(fileProps(survey.getQuestionByName("filesUrl"))).toEqual({
+      storeDataAsText: false,
+      maxSize: MAX_FILE_BYTES,
+    });
+  });
+
+  it("uploads only the storeDataAsText: false question, and stores its url", async () => {
+    const fetchMock = stubUpload();
+    const survey = new Model(BOTH_MODES);
+    attachFileSync({ survey, roomId: "r1" });
+
+    fileOf(survey, "filesUrl").loadFiles([png("a.png")]);
+
+    await vi.waitFor(() => expect(survey.getValue("filesUrl")).toHaveLength(1));
+    expect(survey.getValue("filesUrl")[0].content).toBe("/api/rooms/r1/files/id-0");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/rooms/r1/files?name=a.png");
+    expect(init.method).toBe("POST");
+  });
+
+  it("sends nothing for the storeDataAsText: true question and keeps base64 in the value", async () => {
+    const fetchMock = stubUpload();
+    const survey = new Model(BOTH_MODES);
+    attachFileSync({ survey, roomId: "r1" });
+
+    fileOf(survey, "filesInline").loadFiles([png("a.png")]);
+
+    await vi.waitFor(() => expect(survey.getValue("filesInline")).toHaveLength(1));
+    // survey-core never raises onUploadFiles in this mode — the file's own
+    // base64 IS the value, which is exactly what the schema asked for.
+    expect(survey.getValue("filesInline")[0].content).toMatch(/^data:image\/png;base64,/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("attachFileSync: upload and delete", () => {
+  it("uploads two files picked under the same name as two distinct files", async () => {
+    let next = 0;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 201,
+      json: async () => ({ url: `/api/rooms/r1/files/id-${next++}` }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const survey = new Model({
+      elements: [
+        { type: "file", name: "files", storeDataAsText: false, allowMultiple: true },
+      ],
+    });
+    attachFileSync({ survey, roomId: "r1" });
+
+    fileOf(survey, "files").loadFiles([png("photo.png"), png("photo.png")]);
+
+    await vi.waitFor(() => expect(survey.getValue("files")).toHaveLength(2));
+    // One request per file is what makes this safe: a multipart batch keyed by
+    // field name used to collapse two same-named files into one part.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const contents = survey.getValue("files").map((f: { content: string }) => f.content);
+    expect(new Set(contents).size).toBe(2);
+  });
+
+  it("issues exactly one DELETE for a stored file", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === "DELETE"
+        ? { ok: true, status: 200, json: async () => ({ ok: true }) }
+        : { ok: true, status: 201, json: async () => ({ url: "/api/rooms/r1/files/id-0" }) },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const survey = new Model({
+      elements: [{ type: "file", name: "files", storeDataAsText: false }],
+    });
+    attachFileSync({ survey, roomId: "r1" });
+    fileOf(survey, "files").loadFiles([png("a.png")]);
+    await vi.waitFor(() => expect(survey.getValue("files")).toHaveLength(1));
+
+    fileOf(survey, "files").removeFile("a.png");
+
+    await vi.waitFor(() => expect(survey.getValue("files")).toBeFalsy());
+    const deletes = fetchMock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === "DELETE",
+    );
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0][0]).toBe("/api/rooms/r1/files/id-0");
+  });
+
+  it("issues no request when removing a base64 file", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const survey = new Model({
+      elements: [{ type: "file", name: "files", storeDataAsText: true }],
+    });
+    attachFileSync({ survey, roomId: "r1" });
+    fileOf(survey, "files").loadFiles([png("a.png")]);
+    await vi.waitFor(() => expect(survey.getValue("files")).toHaveLength(1));
+
+    fileOf(survey, "files").removeFile("a.png");
+
+    // onClearFiles fires in BOTH modes, unlike onUploadFiles. Here `content`
+    // is a data: URL — there is nothing on a server to remove, and asking is
+    // pure noise, so the removal must still succeed locally.
+    await vi.waitFor(() => expect(survey.getValue("files")).toBeFalsy());
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

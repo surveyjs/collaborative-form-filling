@@ -15,8 +15,8 @@ import { RoomManager } from "./RoomManager.js";
 
 // Both mirror index.ts — keep the three values in sync, otherwise these tests
 // stop reproducing production behaviour.
-const MAX_HTTP_BUFFER_SIZE = 4 * 1024 * 1024;
-const MAX_VALUE_CHARS = 1024 * 1024;
+const MAX_HTTP_BUFFER_SIZE = 20 * 1024 * 1024;
+const MAX_VALUE_CHARS = 16 * 1024 * 1024;
 
 /** Spins up a real Socket.IO server wired to RoomManager, mirroring index.ts. */
 function startServer(): Promise<{ http: HttpServer; port: number }> {
