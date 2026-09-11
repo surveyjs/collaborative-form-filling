@@ -13,11 +13,17 @@ import type {
 } from "../../shared/events.js";
 import { RoomManager } from "./RoomManager.js";
 
+// Both mirror index.ts — keep the three values in sync, otherwise these tests
+// stop reproducing production behaviour.
+const MAX_HTTP_BUFFER_SIZE = 4 * 1024 * 1024;
+const MAX_VALUE_CHARS = 1024 * 1024;
+
 /** Spins up a real Socket.IO server wired to RoomManager, mirroring index.ts. */
 function startServer(): Promise<{ http: HttpServer; port: number }> {
   const http = createServer();
   const io = new Server<ClientToServerEvents, ServerToClientEvents>(http, {
     cors: { origin: "*" },
+    maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE,
   });
   const rooms = new RoomManager();
 
@@ -35,6 +41,8 @@ function startServer(): Promise<{ http: HttpServer; port: number }> {
       socket.to(roomId).emit("participant-joined", { participant });
     });
     socket.on("value-changed", ({ roomId, name, value }) => {
+      const serialized = JSON.stringify(value);
+      if (serialized !== undefined && serialized.length > MAX_VALUE_CHARS) return;
       rooms.setValue(roomId, name, value);
       socket.to(roomId).emit("value-changed", { roomId, name, value });
     });
@@ -115,6 +123,38 @@ describe("socket handlers", () => {
     const payload = await received;
     expect(payload).toMatchObject({ name: "projectName", value: "Apollo" });
     expect(echoed).toBe(false);
+
+    a.close();
+    b.close();
+  });
+
+  it("drops an oversized value instead of storing or relaying it", async () => {
+    const a = connect(port);
+    const b = connect(port);
+
+    a.emit("join-room", { roomId: "r1", name: "Alice" });
+    await once(a, "room-state");
+    b.emit("join-room", { roomId: "r1", name: "Bob" });
+    await once(b, "room-state");
+
+    const received = once<ValueChangedPayload>(b, "value-changed");
+    // Under maxHttpBufferSize, so it reaches the handler and has to be
+    // refused there — a client that skips the guard in shared/sync.ts must
+    // not be able to park this in the room or fan it out to everyone.
+    a.emit("value-changed", {
+      roomId: "r1",
+      name: "huge",
+      value: "x".repeat(MAX_VALUE_CHARS + 1),
+    });
+    // Ordering on one socket is guaranteed, so if the oversized value were
+    // relayed it would arrive before this one.
+    a.emit("value-changed", { roomId: "r1", name: "projectName", value: "Apollo" });
+
+    const payload = await received;
+    expect(payload).toMatchObject({ name: "projectName", value: "Apollo" });
+
+    // And the connection is still alive, which is the whole point.
+    expect(a.connected).toBe(true);
 
     a.close();
     b.close();

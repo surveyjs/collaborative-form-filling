@@ -12,6 +12,27 @@ export interface SyncSocket {
   off(event: "value-changed", handler: (payload: ValueChangedPayload) => void): void;
 }
 
+/**
+ * Ceiling on one question's serialized value, mirrored by the server's own
+ * check in server/src/index.ts — keep the two in sync.
+ *
+ * Both sit well under the socket's `maxHttpBufferSize`, because exceeding THAT
+ * is not a recoverable error: engine.io refuses the oversized frame and closes
+ * the connection (ws code 1009), which surfaces as the form quietly losing
+ * sync with nothing said. Refusing the value here keeps the connection alive
+ * and puts a message on the question instead.
+ *
+ * This is the one guard a room schema cannot sidestep. File questions are
+ * normally kept small by ./fileSync (only a URL is stored), but a custom
+ * component wrapping a file input, or any question type we do not know about,
+ * bypasses that and lands here.
+ *
+ * Measured in UTF-16 units rather than bytes: exact for the base64 and ASCII
+ * payloads that actually approach the limit, and cheap enough to run on every
+ * keystroke.
+ */
+export const MAX_VALUE_CHARS = 1024 * 1024;
+
 export interface AttachSyncOptions {
   survey: Model;
   socket: SyncSocket;
@@ -78,13 +99,21 @@ function syncMatrixRowCount(survey: Model, name: string, value: unknown): void {
 export function attachSurveySync({ survey, socket, roomId }: AttachSyncOptions): () => void {
   let applyingRemote = false;
 
+  /** Emits one question's value, refusing anything over MAX_VALUE_CHARS. */
+  const emitValue = (name: string, value: unknown) => {
+    const serialized = JSON.stringify(value);
+    if (serialized !== undefined && serialized.length > MAX_VALUE_CHARS) {
+      survey
+        .getQuestionByValueName(name)
+        ?.addError("This answer is too large to share with the other participants.");
+      return;
+    }
+    socket.emit("value-changed", { roomId, name, value });
+  };
+
   const onLocalChange = (_sender: Model, options: { name: string; value: unknown }) => {
     if (applyingRemote) return;
-    socket.emit("value-changed", {
-      roomId,
-      name: options.name,
-      value: normalizeOutgoingValue(survey, options.name, options.value),
-    });
+    emitValue(options.name, normalizeOutgoingValue(survey, options.name, options.value));
   };
 
   // Adding/removing an empty matrixdynamic row never writes the question's
@@ -96,11 +125,7 @@ export function attachSurveySync({ survey, socket, roomId }: AttachSyncOptions):
   const onRowsChanged = (_sender: Model, options: { question: Question }) => {
     if (applyingRemote) return;
     const name = options.question.getValueName();
-    socket.emit("value-changed", {
-      roomId,
-      name,
-      value: normalizeOutgoingValue(survey, name, survey.getValue(name)),
-    });
+    emitValue(name, normalizeOutgoingValue(survey, name, survey.getValue(name)));
   };
 
   const onRemoteChange = (payload: ValueChangedPayload) => {

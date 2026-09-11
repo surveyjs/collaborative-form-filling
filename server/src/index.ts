@@ -14,6 +14,14 @@ import { RoomManager } from "./RoomManager.js";
 /** URL-safe room ids (they become a path/query segment and a socket room). */
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+/**
+ * Ceiling on one question's value, mirroring the client guard in
+ * shared/sync.ts (MAX_VALUE_CHARS) — keep the two in sync. A client that does
+ * not run that guard (an older build, someone else's client) must not be able
+ * to park an oversized answer in a room or have it rebroadcast to everyone.
+ */
+const MAX_VALUE_CHARS = 1024 * 1024;
+
 const PORT = Number(process.env.PORT) || 3001;
 const isProd = process.env.NODE_ENV === "production";
 
@@ -90,6 +98,15 @@ const io = new Server<
   SocketData
 >(httpServer, {
   cors: { origin: "*" },
+  // engine.io defaults to 1e6 bytes and enforces it by refusing the oversized
+  // frame and closing the connection (ws code 1009) — a dropped socket with
+  // nothing said. Values carried here are text and URLs, never file bytes
+  // (shared/fileSync keeps file content out of the value), so this only needs
+  // headroom for a legitimately large answer: a wide matrix, a long comment.
+  // Deliberately modest — the MVP has no auth, so every extra megabyte is
+  // memory any client can make the server hold. Must stay above
+  // MAX_VALUE_CHARS, which is what actually bounds a single answer.
+  maxHttpBufferSize: 4 * 1024 * 1024,
 });
 
 const rooms = new RoomManager();
@@ -111,6 +128,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("value-changed", ({ roomId, name, value }) => {
+    const serialized = JSON.stringify(value);
+    if (serialized !== undefined && serialized.length > MAX_VALUE_CHARS) {
+      console.warn(`[server] dropped an oversized value for "${name}" in room ${roomId}`);
+      return;
+    }
     rooms.setValue(roomId, name, value);
     socket.to(roomId).emit("value-changed", { roomId, name, value });
   });

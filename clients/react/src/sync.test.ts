@@ -271,3 +271,39 @@ describe("attachSurveySync: comments", () => {
     expect(emit).not.toHaveBeenCalled();
   });
 });
+
+describe("attachSurveySync: oversized values", () => {
+  const LIMIT = 1024 * 1024;
+
+  it("refuses a value over the limit and reports it on the question", () => {
+    const survey = new Model(SURVEY_JSON);
+    const { socket, emit } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+
+    survey.setValue("projectName", "x".repeat(LIMIT + 1));
+
+    // Emitting it would blow past the socket's maxHttpBufferSize, and
+    // engine.io answers that by closing the connection rather than by
+    // rejecting the packet — the form would silently stop syncing.
+    expect(emit).not.toHaveBeenCalled();
+    expect(survey.getQuestionByName("projectName").errors.length).toBeGreaterThan(0);
+  });
+
+  it("still emits a value just under the limit", () => {
+    const survey = new Model(SURVEY_JSON);
+    const { socket, emit } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+
+    // JSON.stringify wraps a string in two quotes, so this lands exactly on
+    // the limit rather than over it.
+    const value = "x".repeat(LIMIT - 2);
+    survey.setValue("projectName", value);
+
+    expect(emit).toHaveBeenCalledWith("value-changed", {
+      roomId: "r1",
+      name: "projectName",
+      value,
+    });
+    expect(survey.getQuestionByName("projectName").errors).toHaveLength(0);
+  });
+});

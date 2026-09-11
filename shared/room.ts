@@ -3,6 +3,7 @@ import type { Participant, RoomStatePayload } from "./events";
 import { ParticipantsBarModel } from "./participantsBar";
 import type { AppSocket } from "./socket";
 import { attachSurveySync } from "./sync";
+import { attachFileSync } from "./fileSync";
 import { attachPresence } from "./presenceSync";
 // Separate import type: the Angular client builds with a TS version that
 // predates inline `type` modifiers in named imports.
@@ -35,6 +36,7 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
   // re-attaching on every participants change.
   let participants: Participant[] = [];
   let detachSync: (() => void) | null = null;
+  let detachFiles: (() => void) | null = null;
   let presence: PresenceHandle | null = null;
   let bar: ParticipantsBarModel | null = null;
 
@@ -51,6 +53,11 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
     if ((state.surveyJson as { lazyRenderEnabled?: boolean }).lazyRenderEnabled === true) {
       model.lazyRenderEnabled = true;
     }
+    // Before `model.data`: file questions must already be normalized onto the
+    // URL-based transport by the time the room snapshot lands on them.
+    detachFiles?.();
+    detachFiles = attachFileSync({ survey: model });
+
     model.data = state.data;
 
     // Tear down any previous sync (e.g. on reconnect) before re-attaching.
@@ -99,6 +106,8 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
     socket.off("participant-left", onLeft);
     detachSync?.();
     detachSync = null;
+    detachFiles?.();
+    detachFiles = null;
     presence?.detach();
     presence = null;
     bar?.dispose();
