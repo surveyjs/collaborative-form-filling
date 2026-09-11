@@ -32,7 +32,9 @@ test("two participants co-edit one survey response in real time", async ({ brows
   // A edits the text question -> B sees it.
   const textA = pageA.getByLabel("Project name");
   await textA.fill("Apollo");
-  await textA.blur(); // SurveyJS text updates on blur by default
+  // SurveyJS commits a text input on blur; a peer answer flushes it too (see
+  // the typing-clobber tests at the end of this file).
+  await textA.blur();
   await expect(pageB.getByLabel("Project name")).toHaveValue("Apollo");
 
   // B selects a radiogroup option -> A sees it checked.
@@ -330,6 +332,153 @@ test("last write wins when two participants edit the same question", async ({ br
   await textB.blur();
   await expect(pageA.getByLabel("Project name")).toHaveValue("Second");
   await expect(pageB.getByLabel("Project name")).toHaveValue("Second");
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+/**
+ * Schema for the typing-clobber tests. The checkbox deliberately sits on a
+ * SECOND page: the reported symptom was a peer answering somewhere the typist
+ * could not even see. No `title` fields, so the question `name` is the label.
+ */
+const TYPING_SCHEMA = {
+  pages: [
+    {
+      name: "p1",
+      elements: [
+        { type: "text", name: "notes" },
+        { type: "text", name: "email", inputType: "email" },
+      ],
+    },
+    { name: "p2", elements: [{ type: "checkbox", name: "picks", choices: ["c1", "c2"] }] },
+  ],
+};
+
+/**
+ * Joins a room, pasting the schema only when creating it: the lobby hides the
+ * schema field once the typed room already exists.
+ */
+async function joinRoomWithSchema(
+  context: BrowserContext,
+  name: string,
+  room: string,
+  schema?: object,
+): Promise<Page> {
+  const page = await context.newPage();
+  await page.goto("/");
+  await page.getByTestId("name-input").fill(name);
+  await page.getByTestId("room-input").fill(room);
+  if (schema) {
+    await page.getByTestId("survey-json-input").fill(JSON.stringify(schema));
+  }
+  await page.getByTestId("join-button").click();
+  await expect(page.getByTestId("room-id")).toHaveText(room);
+  return page;
+}
+
+test("a peer's answers do not erase text being typed on another page", async ({ browser }) => {
+  const ROOM = "e2e-typing-clobber";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoomWithSchema(ctxA, "Alice", ROOM, TYPING_SCHEMA);
+  const pageB = await joinRoomWithSchema(ctxB, "Bob", ROOM);
+  await expect(pageA.getByLabel("notes")).toBeVisible();
+
+  // Bob moves to the page Alice cannot see, then rattles through a checkbox.
+  await nextPage(pageB);
+  await expect(pageB.getByText("c1", { exact: true })).toBeVisible();
+
+  // Alice types and NEVER leaves the field: SurveyJS keeps those characters in
+  // the DOM only, which is exactly what Bob's answers used to wipe out.
+  const notesA = pageA.getByLabel("notes");
+  await notesA.click();
+  // Driven at once: the two contexts are independent, and what the report
+  // describes is a peer answering BETWEEN keystrokes. It is that packet - not
+  // one arriving after the word is finished - that repaints the survey
+  // mid-word. Alice types for longer than Bob needs for his clicks, so several
+  // of his answers are guaranteed to land while she is still going.
+  await Promise.all([
+    notesA.pressSequentially("Apollo mission", { delay: 100 }),
+    (async () => {
+      for (let i = 0; i < 6; i++) {
+        await pageB.getByText(i % 2 === 0 ? "c1" : "c2", { exact: true }).click();
+      }
+    })(),
+  ]);
+
+  await expect(notesA).toHaveValue("Apollo mission");
+  await expect(notesA).toBeFocused();
+  // The caret survived too, so she can simply carry on.
+  await notesA.pressSequentially("-2", { delay: 30 });
+  await expect(notesA).toHaveValue("Apollo mission-2");
+
+  // The tail is still uncommitted, as SurveyJS intends - one more answer from
+  // Bob flushes it, and it reaches him without Alice ever blurring.
+  await pageB.getByText("c1", { exact: true }).click();
+  await pageB.locator(".sd-navigation__prev-btn").click();
+  await expect(pageB.getByLabel("notes")).toHaveValue("Apollo mission-2");
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test("the rescue is not limited to plain text inputs", async ({ browser }) => {
+  const ROOM = "e2e-typing-email";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoomWithSchema(ctxA, "Alice", ROOM, TYPING_SCHEMA);
+  const pageB = await joinRoomWithSchema(ctxB, "Bob", ROOM);
+  await expect(pageA.getByLabel("email")).toBeVisible();
+  await nextPage(pageB);
+
+  // inputType "email" is outside survey-core's own onTyping support
+  // (QuestionText.isTextValue covers text/number/password and dates only), so
+  // this is the case a textUpdateMode change could never have covered.
+  const emailA = pageA.getByLabel("email");
+  await emailA.click();
+  await Promise.all([
+    emailA.pressSequentially("ann@example.com", { delay: 100 }),
+    (async () => {
+      for (let i = 0; i < 4; i++) {
+        await pageB.getByText(i % 2 === 0 ? "c1" : "c2", { exact: true }).click();
+      }
+    })(),
+  ]);
+
+  await expect(emailA).toHaveValue("ann@example.com");
+  await expect(emailA).toBeFocused();
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test("a reconnected participant keeps syncing and stays on their page", async ({ browser }) => {
+  const ROOM = "e2e-reconnect";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoomWithSchema(ctxA, "Alice", ROOM, TYPING_SCHEMA);
+  const pageB = await joinRoomWithSchema(ctxB, "Bob", ROOM);
+  await expect(pageA.getByLabel("notes")).toBeVisible();
+
+  // Alice walks to the second page, then loses the network briefly. A reconnect
+  // hands her a new socket id, and the server tracks room membership per
+  // socket — without re-joining she would be in no room at all from here on.
+  await nextPage(pageA);
+  await expect(pageA.getByText("c1", { exact: true })).toBeVisible();
+  await ctxA.setOffline(true);
+  await ctxA.setOffline(false);
+
+  // She is still where she was, not thrown back to the first page.
+  await expect(pageA.getByText("c1", { exact: true })).toBeVisible();
+
+  // Sync works again in both directions.
+  await pageA.getByText("c1", { exact: true }).click();
+  await nextPage(pageB);
+  await expect(pageB.getByRole("checkbox", { name: "c1" })).toBeChecked();
+
+  await pageB.getByText("c2", { exact: true }).click();
+  await expect(pageA.getByRole("checkbox", { name: "c2" })).toBeChecked();
 
   await ctxA.close();
   await ctxB.close();

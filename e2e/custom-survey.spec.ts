@@ -95,7 +95,7 @@ test("custom schema co-edits and propagates to a second joiner", async ({ browse
   // A edits the text question -> B sees it.
   const textA = pageA.getByLabel("q1");
   await textA.fill("hello");
-  await textA.blur(); // SurveyJS text updates on blur by default
+  await textA.blur(); // SurveyJS commits a text input on blur
   await expect(pageB.getByLabel("q1")).toHaveValue("hello");
 
   // A selects a radiogroup option -> B sees it checked.

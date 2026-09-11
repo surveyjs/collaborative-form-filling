@@ -1,12 +1,13 @@
 import { Model } from "survey-core";
+// Separate type imports: the Angular client builds with a TS version that
+// predates inline `type` modifiers in named imports.
+import type { PageModel } from "survey-core";
 import type { Participant, RoomStatePayload } from "./events";
 import { ParticipantsBarModel } from "./participantsBar";
 import type { AppSocket } from "./socket";
 import { attachSurveySync } from "./sync";
 import { attachFileSync } from "./fileSync";
-import { attachPresence } from "./presenceSync";
-// Separate import type: the Angular client builds with a TS version that
-// predates inline `type` modifiers in named imports.
+import { attachPresence, pageKey, resolvePage } from "./presenceSync";
 import type { PresenceHandle } from "./presenceSync";
 
 export interface ConnectRoomOptions {
@@ -35,6 +36,7 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
   // Live roster mirror so presence can resolve peer name/color without
   // re-attaching on every participants change.
   let participants: Participant[] = [];
+  let survey: Model | null = null;
   let detachSync: (() => void) | null = null;
   let detachFiles: (() => void) | null = null;
   let presence: PresenceHandle | null = null;
@@ -46,6 +48,13 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
   };
 
   const onRoomState = (state: RoomStatePayload) => {
+    // A re-join rebuilds the model from scratch, which would drop the reader
+    // back onto the first page; remember where they were. Page KEY rather than
+    // the object: the new model has different instances.
+    const previousPage = survey?.currentPage
+      ? pageKey(survey, survey.currentPage as PageModel)
+      : null;
+
     const model = new Model(state.surveyJson);
     // `lazyRenderEnabled` is not a serialized survey property (survey-core
     // ignores it in JSON), but lazy rendering matters for large collaborative
@@ -59,6 +68,15 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
     detachFiles = attachFileSync({ survey: model, roomId });
 
     model.data = state.data;
+
+    // After the data, so pages hidden by a `visibleIf` resolve correctly, and
+    // before presence attaches, so its initial page announcement is the page
+    // the user is actually looking at.
+    if (previousPage) {
+      const page = resolvePage(model, previousPage);
+      if (page) model.currentPage = page;
+    }
+    survey = model;
 
     // Tear down any previous sync (e.g. on reconnect) before re-attaching.
     detachSync?.();
@@ -98,9 +116,18 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
   socket.on("participant-joined", onJoined);
   socket.on("participant-left", onLeft);
 
-  socket.emit("join-room", { roomId, name });
+  // Every connection has to join, not just the first one: a reconnect gives
+  // the client a new socket id, and the server tracks room membership per
+  // socket. Without re-joining, the reconnected client is in no room at all —
+  // it stops receiving peers and its own edits go nowhere, silently.
+  // Joining from the handler rather than eagerly avoids a double join: if the
+  // socket is not connected yet, `connect` is still to come and does the work.
+  const join = () => socket.emit("join-room", { roomId, name });
+  socket.on("connect", join);
+  if (socket.connected) join();
 
   return () => {
+    socket.off("connect", join);
     socket.off("room-state", onRoomState);
     socket.off("participant-joined", onJoined);
     socket.off("participant-left", onLeft);
@@ -112,6 +139,7 @@ export function connectRoom({ socket, roomId, name, onSurvey, getInviteLink }: C
     presence = null;
     bar?.dispose();
     bar = null;
+    survey = null;
   };
 }
 

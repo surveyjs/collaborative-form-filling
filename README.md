@@ -15,7 +15,9 @@ A real-time collaborative survey and form filling service that allows multiple p
 - The server stores the survey schema and current responses in memory.
 - When a participant changes a value, the [`onValueChanged`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#onValueChanged) event in SurveyJS is triggered, and the update is broadcast to other participants via Socket.IO.
 - Clients apply incoming updates using [`survey.setValue()`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#setValue).
-- An `applyingRemote` flag prevents update loops (see [`shared/sync.ts`](shared/sync.ts)).
+- Before applying one, the client commits whatever is being typed in the focused field into the model. SurveyJS keeps a text input uncommitted until blur, so those characters live only in the DOM - and the re-render that applying a peer answer triggers would otherwise overwrite them (see [`shared/sync.ts`](shared/sync.ts)).
+- Update loops are prevented by suppressing the echo of the question NAME being applied, rather than by a blanket flag: survey-core writes OTHER questions as a consequence of the one applied (`clearInvisibleValues`, triggers), and those are local changes the peers still need to hear about.
+- Every connection re-joins the room, not just the first one: a reconnect gives the client a new socket id, and room membership is tracked per socket (see [`shared/room.ts`](shared/room.ts)).
 - Conflicts are resolved using a last-write-wins strategy at the individual question level.
 - The framework-agnostic wiring (sync + presence + participants bar) lives in [`shared/room.ts`](shared/room.ts) (`connectRoom`) and is shared by all four clients.
 

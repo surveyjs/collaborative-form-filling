@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Model, type QuestionMatrixDynamicModel } from "survey-core";
 import { attachSurveySync, MAX_VALUE_CHARS, type SyncSocket } from "../../../shared/sync";
 import type { ValueChangedPayload } from "../../../shared/events";
@@ -307,5 +307,138 @@ describe("attachSurveySync: oversized values", () => {
       value,
     });
     expect(survey.getQuestionByName("projectName").errors).toHaveLength(0);
+  });
+});
+
+describe("attachSurveySync: rescuing the focused editor", () => {
+  /**
+   * Mounts a bare input carrying the id survey-core would render for that
+   * question and focuses it. No framework involved: the rescue only depends on
+   * document.activeElement and the id, so the same code path covers React,
+   * Plain JS, Vue and Angular. surveyRender.test.tsx covers the rendered half.
+   */
+  const focusEditorFor = (question: { inputId: string }, text: string) => {
+    const input = document.createElement("input");
+    input.id = question.inputId;
+    document.body.appendChild(input);
+    input.value = text;
+    input.focus();
+    return input;
+  };
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("commits and broadcasts the half-typed text before applying a peer value", () => {
+    const survey = new Model(SURVEY_JSON);
+    const { socket, emit, receive } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+    const typed = survey.getQuestionByName("projectName") as unknown as { inputId: string };
+    focusEditorFor(typed, "Apollo");
+
+    receive({ roomId: "r1", name: "owner", value: "Bob" });
+
+    // SurveyJS would only have committed this on blur; by then the repaint
+    // triggered by the peer value has already overwritten the input.
+    expect(survey.getValue("projectName")).toBe("Apollo");
+    expect(emit).toHaveBeenCalledWith("value-changed", {
+      roomId: "r1",
+      name: "projectName",
+      value: "Apollo",
+    });
+    expect(survey.getValue("owner")).toBe("Bob");
+  });
+
+  it("ignores a focused element that is not a survey editor", () => {
+    const survey = new Model(SURVEY_JSON);
+    const { socket, emit, receive } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+    const stray = document.createElement("input");
+    stray.id = "some-other-field";
+    document.body.appendChild(stray);
+    stray.value = "typed elsewhere";
+    stray.focus();
+
+    receive({ roomId: "r1", name: "owner", value: "Bob" });
+
+    expect(emit).not.toHaveBeenCalled();
+    expect(survey.getValue("projectName")).toBeUndefined();
+  });
+
+  it("ignores an editor-shaped element with no id", () => {
+    const survey = new Model(SURVEY_JSON);
+    const { socket, emit, receive } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.value = "Apollo";
+    input.focus();
+
+    receive({ roomId: "r1", name: "owner", value: "Bob" });
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("does not re-emit when the editor matches the model already", () => {
+    const survey = new Model(SURVEY_JSON);
+    const { socket, emit, receive } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+    survey.setValue("projectName", "Apollo");
+    emit.mockClear();
+    const typed = survey.getQuestionByName("projectName") as unknown as { inputId: string };
+    focusEditorFor(typed, "Apollo");
+
+    receive({ roomId: "r1", name: "owner", value: "Bob" });
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("attachSurveySync: changes cascading from a remote value", () => {
+  // Hiding a question clears its answer on this client. That clear is a local
+  // change every peer has to hear about, even though it was set off by their
+  // own edit — the old blanket "applying remote" flag swallowed it and left
+  // the clients holding different data with nothing to reconcile them.
+  const CASCADE_JSON = {
+    clearInvisibleValues: "onHidden",
+    elements: [
+      { type: "text", name: "stage" },
+      { type: "text", name: "details", visibleIf: "{stage} = 'open'" },
+    ],
+  };
+
+  it("broadcasts a value the remote change cleared on this client", () => {
+    const survey = new Model(CASCADE_JSON);
+    const { socket, emit, receive } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+    survey.setValue("stage", "open");
+    survey.setValue("details", "notes");
+    emit.mockClear();
+
+    // The peer closes the stage, which hides "details" here and clears it.
+    receive({ roomId: "r1", name: "stage", value: "closed" });
+
+    expect(survey.getValue("details")).toBeUndefined();
+    expect(emit).toHaveBeenCalledWith("value-changed", {
+      roomId: "r1",
+      name: "details",
+      value: undefined,
+    });
+  });
+
+  it("still suppresses the echo of the value being applied", () => {
+    const survey = new Model(CASCADE_JSON);
+    const { socket, emit, receive } = makeMockSocket();
+    attachSurveySync({ survey, socket, roomId: "r1" });
+
+    receive({ roomId: "r1", name: "stage", value: "open" });
+
+    expect(survey.getValue("stage")).toBe("open");
+    expect(emit).not.toHaveBeenCalledWith("value-changed", {
+      roomId: "r1",
+      name: "stage",
+      value: "open",
+    });
   });
 });

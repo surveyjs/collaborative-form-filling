@@ -52,24 +52,6 @@ export interface AttachSyncOptions {
 }
 
 /**
- * Wires a SurveyJS model to the socket for bidirectional, real-time co-editing.
- *
- * - Local edits (`onValueChanged`) are emitted to the server.
- * - Adding/removing an EMPTY matrixdynamic row changes only `rowCount` — no
- *   value is written and `onValueChanged` stays silent — so
- *   `onMatrixRowAdded`/`onMatrixRowRemoved` are synced as well, emitting the
- *   question's padded value.
- * - Remote `value-changed` events are applied via `survey.setValue`; names
- *   carrying the comment suffix ("-Comment") go through `survey.setComment`,
- *   otherwise the receiver's visible comment/Other text would not update.
- *
- * `setValue` re-triggers `onValueChanged`, which would echo the change back and
- * loop forever; the `applyingRemote` guard suppresses the re-emit while a remote
- * change is being applied.
- *
- * Returns a detach function that removes all listeners.
- */
-/**
  * Pads a matrixdynamic value with empty row objects up to the question's
  * current `rowCount`.
  *
@@ -108,8 +90,117 @@ function syncMatrixRowCount(survey: Model, name: string, value: unknown): void {
   if (matrix.rowCount !== value.length) matrix.rowCount = value.length;
 }
 
+/** A focused text editor and the field of its question it writes into. */
+interface FocusedEditor {
+  question: Question;
+  /** The answer itself vs. the question's comment/"Other" box. */
+  field: "value" | "comment";
+  text: string;
+}
+
+/**
+ * Resolves the text editor the local user currently has focus in, if any.
+ *
+ * Matching is by element id: survey-core renders the answer input with
+ * `question.inputId` and the comment/"Other" box with `question.commentId`.
+ * The answer match is additionally restricted to `textbase` descendants (the
+ * `text` and `comment` question types), because other types reuse `inputId`
+ * for controls that are NOT the answer — a dropdown puts it on its filter box,
+ * where the typed text is a search string that must never become a value.
+ *
+ * `getAllQuestions(..., includeNested)` is what makes this schema-agnostic:
+ * survey-core implements the nested walk for every composite type, so this
+ * also finds editors inside composite components, matrix rows (the REAL
+ * `visibleRows` cells, not the column templates), dynamic panels and
+ * multipletext items — without this module knowing anything about the schema.
+ */
+function findFocusedEditor(survey: Model): FocusedEditor | null {
+  if (typeof document === "undefined") return null;
+  const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  if (!el || (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA") || !el.id) return null;
+  const questions = survey.getAllQuestions(false, false, true);
+  for (let i = 0; i < questions.length; i++) {
+    const question = questions[i];
+    const ids = question as unknown as { inputId?: string; commentId?: string };
+    if (ids.inputId === el.id && question.isDescendantOf("textbase")) {
+      return { question, field: "value", text: el.value };
+    }
+    if (ids.commentId === el.id) {
+      return { question, field: "comment", text: el.value };
+    }
+  }
+  return null;
+}
+
+/**
+ * Commits the focused editor's on-screen text into the model.
+ *
+ * SurveyJS commits a text input only on blur (`textUpdateMode` defaults to
+ * "onBlur"), so mid-typing the characters exist ONLY in the DOM — the model
+ * still holds the previous value. That is harmless until something repaints,
+ * and applying a peer's answer does exactly that: it changes properties on the
+ * SurveyModel, the whole question tree re-renders, and survey-react-ui's
+ * `SurveyQuestionUncontrolledElement.updateDomElement` writes the model value
+ * back over the focused input — it diffs against the LIVE DOM value and never
+ * checks `document.activeElement`. The half-typed answer disappears, which is
+ * what made a peer ticking checkboxes wipe whatever someone else was typing.
+ *
+ * Committing first makes model and DOM agree, so that write is skipped and
+ * both the text and the caret survive.
+ *
+ * This deliberately goes through the normal setters, so it emits like any
+ * other local edit. It must NOT be silent: an unsent value would also stop
+ * blur from changing anything, `onValueChanged` would never fire for it, and
+ * the answer would never reach the server at all.
+ *
+ * `inputValue` rather than `value` where it exists: its setter unmasks masked
+ * input and coerces the question's value type, so handing it raw DOM text is
+ * safe. Types without it (`comment`) take the text as their value.
+ */
+function commitFocusedEditor(survey: Model): void {
+  const focused = findFocusedEditor(survey);
+  if (!focused) return;
+  const editor = focused.question as unknown as {
+    inputValue?: unknown;
+    value?: unknown;
+    comment?: unknown;
+  };
+  if (focused.field === "comment") {
+    if (editor.comment !== focused.text) editor.comment = focused.text;
+  } else if ("inputValue" in editor) {
+    if (editor.inputValue !== focused.text) editor.inputValue = focused.text;
+  } else if (editor.value !== focused.text) {
+    editor.value = focused.text;
+  }
+}
+
+/**
+ * Wires a SurveyJS model to the socket for bidirectional, real-time co-editing.
+ *
+ * - Local edits (`onValueChanged`) are emitted to the server.
+ * - Adding/removing an EMPTY matrixdynamic row changes only `rowCount` — no
+ *   value is written and `onValueChanged` stays silent — so
+ *   `onMatrixRowAdded`/`onMatrixRowRemoved` are synced as well, emitting the
+ *   question's padded value.
+ * - Remote `value-changed` events are applied via `survey.setValue`; names
+ *   carrying the comment suffix ("-Comment") go through `survey.setComment`,
+ *   otherwise the receiver's visible comment/Other text would not update.
+ * - Whatever the local user is typing is committed to the model first, so the
+ *   repaint that follows cannot overwrite it (see commitFocusedEditor).
+ *
+ * `setValue` re-triggers `onValueChanged`, which would echo the change back and
+ * loop forever. The guard is the NAME being applied rather than a blanket "a
+ * remote change is in flight" flag: survey-core routinely writes OTHER
+ * questions as a consequence of the one being applied (`clearIncorrectValues`,
+ * triggers, `clearInvisibleValues`), and those are genuine local changes the
+ * peers have to hear about. Suppressing them too left every client to re-derive
+ * the cascade on its own, and to diverge silently when it could not.
+ *
+ * Returns a detach function that removes all listeners.
+ */
 export function attachSurveySync({ survey, socket, roomId }: AttachSyncOptions): () => void {
-  let applyingRemote = false;
+  /** Question name currently being applied from a remote payload, if any. */
+  let applyingName: string | null = null;
 
   /** Emits one question's value, refusing anything over MAX_VALUE_CHARS. */
   const emitValue = (name: string, value: unknown) => {
@@ -124,7 +215,7 @@ export function attachSurveySync({ survey, socket, roomId }: AttachSyncOptions):
   };
 
   const onLocalChange = (_sender: Model, options: { name: string; value: unknown }) => {
-    if (applyingRemote) return;
+    if (options.name === applyingName) return;
     emitValue(options.name, normalizeOutgoingValue(survey, options.name, options.value));
   };
 
@@ -135,14 +226,17 @@ export function attachSurveySync({ survey, socket, roomId }: AttachSyncOptions):
   // emit; harmless (last-write-wins on the server, same-value setValue on
   // peers), so no dedup.
   const onRowsChanged = (_sender: Model, options: { question: Question }) => {
-    if (applyingRemote) return;
     const name = options.question.getValueName();
+    if (name === applyingName) return;
     emitValue(name, normalizeOutgoingValue(survey, name, survey.getValue(name)));
   };
 
   const onRemoteChange = (payload: ValueChangedPayload) => {
     if (payload.roomId !== roomId) return;
-    applyingRemote = true;
+    // Before the echo guard is armed, so the rescued text goes out as the
+    // local edit it is.
+    commitFocusedEditor(survey);
+    applyingName = payload.name;
     try {
       const suffix = survey.commentSuffix;
       if (payload.name.endsWith(suffix)) {
@@ -152,7 +246,7 @@ export function attachSurveySync({ survey, socket, roomId }: AttachSyncOptions):
         syncMatrixRowCount(survey, payload.name, payload.value);
       }
     } finally {
-      applyingRemote = false;
+      applyingName = null;
     }
   };
 
