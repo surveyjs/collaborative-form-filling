@@ -5,6 +5,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Collaborative Survey</title>
+  <!-- survey-core ships no @font-face of its own: the theme only names
+       "Open Sans" (weights 400/600/700) and the host page supplies the faces. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400..700&display=swap">
   <style>
     body.type_embedded .sd-title.sd-container-modern__title {
       display: none;
