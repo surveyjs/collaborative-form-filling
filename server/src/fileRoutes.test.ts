@@ -29,6 +29,19 @@ const PNG = Buffer.from(
   "base64",
 );
 
+/**
+ * A request body fetch will accept.
+ *
+ * `BodyInit` admits `ArrayBufferView<ArrayBuffer>`, while @types/node models
+ * Buffer as `Buffer<ArrayBufferLike>` — which also covers SharedArrayBuffer
+ * and so is not assignable. Copying into a fresh Uint8Array gives a view over
+ * a real ArrayBuffer; the type argument has to be spelled out, because the
+ * bare `Uint8Array` alias defaults back to `ArrayBufferLike`.
+ */
+function asBody(buffer: Buffer): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(buffer);
+}
+
 describe("file routes", () => {
   let root: string;
   let http: HttpServer;
@@ -46,7 +59,7 @@ describe("file routes", () => {
     return fetch(`${base}/api/rooms/${roomId}/files?name=${encodeURIComponent(name)}`, {
       method: "POST",
       headers: { "content-type": type },
-      body,
+      body: asBody(body),
     });
   }
 
@@ -74,7 +87,7 @@ describe("file routes", () => {
     const response = await fetch(`${base}/api/rooms/..%2Fescape/files?name=a.png`, {
       method: "POST",
       headers: { "content-type": "image/png" },
-      body: PNG,
+      body: asBody(PNG),
     });
 
     expect(response.status).toBe(400);
