@@ -8,9 +8,8 @@
     "build": "tsc -b && vite build"
   },
   "dependencies": {
-    "socket.io-client": "^4.8.1",
-    "survey-core": "^3.0.0",
-    "survey-js-ui": "^3.0.0"
+    "survey-core": "file:../../../survey-library/packages/survey-core/build",
+    "survey-js-ui": "file:../../../survey-library/packages/survey-js-ui/build"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

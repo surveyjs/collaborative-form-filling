@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ROOM_ID_RE } from "./RoomManager.js";
+import { ROOM_ID_RE } from "./protocol.js";
 
 /** Metadata for one uploaded file. The bytes live at `path`, never in here. */
 export interface StoredFile {

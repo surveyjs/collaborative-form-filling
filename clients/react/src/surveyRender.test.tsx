@@ -2,8 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { ComponentCollection, Model } from "survey-core";
 import { Survey } from "survey-react-ui";
-import { attachSurveySync, type SyncSocket } from "../../../shared/sync";
-import type { ValueChangedPayload } from "../../../shared/events";
+import { CollaborationPlugin } from "survey-core/collaboration";
 
 /**
  * Renders a real <Survey> to cover the half of the bug that lives in the view
@@ -56,29 +55,6 @@ const ROOM_JSON = {
   ],
 };
 
-/** A mock socket capturing emits and letting tests drive incoming events. */
-function makeMockSocket() {
-  const emit = vi.fn();
-  const handlers = new Map<string, ((p: ValueChangedPayload) => void)[]>();
-
-  const socket: SyncSocket = {
-    emit: emit as SyncSocket["emit"],
-    on: (event, handler) => {
-      const list = handlers.get(event) ?? [];
-      list.push(handler);
-      handlers.set(event, list);
-    },
-    off: (event, handler) => {
-      handlers.set(event, (handlers.get(event) ?? []).filter((h) => h !== handler));
-    },
-  };
-
-  const receive = (payload: ValueChangedPayload) =>
-    (handlers.get("value-changed") ?? []).forEach((h) => h(payload));
-
-  return { socket, emit, receive };
-}
-
 /**
  * Types without ever leaving the field - the state the bug needs. Dispatching
  * the native "input" event is what React binds onChange to, and under the
@@ -97,18 +73,23 @@ function typeInto(input: HTMLInputElement, text: string): void {
 
 function renderRoom(options: { sync: boolean } = { sync: true }) {
   const survey = new Model(ROOM_JSON);
-  const { socket, emit, receive: deliver } = makeMockSocket();
-  const detach = options.sync
-    ? attachSurveySync({ survey, socket, roomId: "r1" })
-    : () => {};
+  const sent: Array<any> = [];
+  // No transport to fake: the plugin emits events and takes messages, so the test
+  // plays the relay itself.
+  const plugin = options.sync
+    ? new CollaborationPlugin(survey, { presence: false, bar: false })
+    : null;
+  plugin?.onEvent.add((_s, o) => sent.push(o.message));
   const view = render(<Survey model={survey} />);
   const input = (name: string) =>
     view.container.querySelector<HTMLInputElement>(`[data-name="${name}"] input`)!;
-  // act(): a socket handler is outside React, so the re-render it schedules
-  // is batched. Flushing it here is what the browser does on the next tick -
-  // and flushing is exactly when the input gets overwritten.
-  const receive = (payload: ValueChangedPayload) => act(() => deliver(payload));
-  return { survey, emit, receive, detach, input, container: view.container };
+  // act(): applying a peer message happens outside React, so the re-render it
+  // schedules is batched. Flushing it here is what the browser does on the next
+  // tick - and flushing is exactly when the input gets overwritten.
+  const receive = (name: string, value: unknown) =>
+    act(() => plugin?.apply({ type: "value", key: name, value }));
+  const detach = () => plugin?.dispose();
+  return { survey, sent, receive, detach, input, container: view.container };
 }
 
 afterEach(() => cleanup());
@@ -121,9 +102,9 @@ describe("a peer's answer while someone is typing", () => {
 
     // Mimics the report: a peer rattling through checkbox toggles. Each one
     // repaints the whole survey on this client.
-    receive({ roomId: "r1", name: "stack", value: ["React"] });
-    receive({ roomId: "r1", name: "stack", value: ["React", "Docker"] });
-    receive({ roomId: "r1", name: "stack", value: ["Docker"] });
+    receive("stack", ["React"]);
+    receive("stack", ["React", "Docker"]);
+    receive("stack", ["Docker"]);
 
     expect(input("projectName")).toHaveValue("Apollo");
     expect(input("projectName")).toHaveFocus();
@@ -150,7 +131,7 @@ describe("a peer's answer while someone is typing", () => {
     const { receive, input, detach } = renderRoom();
 
     typeInto(input("projectName"), "Apollo");
-    receive({ roomId: "r1", name: "owner", value: "Bob" });
+    receive("owner", "Bob");
 
     expect(input("projectName")).toHaveValue("Apollo");
     detach();
@@ -163,7 +144,7 @@ describe("a peer's answer while someone is typing", () => {
     // and date types, so "email" can never be kept in step by textUpdateMode.
     // Note: jsdom throws on selectionStart for this input type.
     typeInto(input("contactEmail"), "ann@example.com");
-    receive({ roomId: "r1", name: "stack", value: ["React"] });
+    receive("stack", ["React"]);
 
     expect(input("contactEmail")).toHaveValue("ann@example.com");
     expect(input("contactEmail")).toHaveFocus();
@@ -177,35 +158,87 @@ describe("a peer's answer while someone is typing", () => {
       '[data-name="members"] table input',
     )!;
     typeInto(cell, "Ann");
-    receive({ roomId: "r1", name: "stack", value: ["React"] });
+    receive("stack", ["React"]);
     expect(cell).toHaveValue("Ann");
 
     const nested = container.querySelector<HTMLInputElement>(
       '[data-name="lead"] [data-name="fullName"] input',
     )!;
     typeInto(nested, "Bob");
-    receive({ roomId: "r1", name: "stack", value: ["Docker"] });
+    receive("stack", ["Docker"]);
     expect(nested).toHaveValue("Bob");
 
     detach();
   });
 
   it("broadcasts the rescued text instead of stranding it in the model", () => {
-    const { emit, receive, input, detach } = renderRoom();
+    const { sent, receive, input, detach } = renderRoom();
 
     typeInto(input("projectName"), "Apollo");
-    expect(emit).not.toHaveBeenCalled(); // still uncommitted, as SurveyJS wants
+    expect(sent).toHaveLength(0); // still uncommitted, as SurveyJS wants
 
-    receive({ roomId: "r1", name: "stack", value: ["React"] });
+    receive("stack", ["React"]);
 
     // Without this the value would never reach the server: blur would no
     // longer change anything, so onValueChanged would never fire for it.
-    expect(emit).toHaveBeenCalledWith("value-changed", {
-      roomId: "r1",
-      name: "projectName",
-      value: "Apollo",
-    });
+    expect(sent).toContainEqual({ type: "value", key: "projectName", value: "Apollo" });
 
     detach();
+  });
+});
+
+/**
+ * The participants strip is contributed to the "header" layout container. This is
+ * the consumer-side check that the choice actually holds through a real render of
+ * survey-react-ui, which is where the previous container ("contentTop") failed:
+ * contentTop renders inside .sd-body and only while a page is showing.
+ *
+ * CSS is not loaded here, so this asserts the half that is structure - document
+ * order and survival - while the e2e suite asserts the painted geometry.
+ */
+describe("the collaboration bar in a real render", () => {
+  function renderWithBar() {
+    // A title of its own: the advanced header renders nothing when it has no content,
+    // and an absent header would make the ordering check below vacuous.
+    const survey = new Model({ ...ROOM_JSON, title: "Room form" });
+    const plugin = new CollaborationPlugin(survey, { presence: false });
+    const view = render(<Survey model={survey} />);
+    return { survey, plugin, container: view.container };
+  }
+
+  it("renders before the survey's own header, not inside the form body", () => {
+    const { plugin, container } = renderWithBar();
+
+    const bar = container.querySelector(".sv-collab-bar")!;
+    expect(bar).toBeTruthy();
+    // Outside .sd-body: that element's padding-top is what used to push the strip
+    // down, and its wrapper div is what made position:sticky inert.
+    expect(bar.closest(".sd-body")).toBeNull();
+    expect(bar.parentElement?.className).toContain("sd-container-modern");
+
+    // headerView defaults to "advanced", so the survey title is a layout element in
+    // the same container; the strip's index is what puts it first.
+    const header = container.querySelector(".sv-header")!;
+    expect(header).toBeTruthy();
+    expect(bar.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+
+    plugin.dispose();
+  });
+
+  it("is still there once the form is completed", () => {
+    const { survey, plugin, container } = renderWithBar();
+    expect(container.querySelector(".sv-collab-bar")).toBeTruthy();
+
+    act(() => {
+      survey.doComplete();
+    });
+
+    // People are still in the room after someone finishes, so the strip has to
+    // outlive the pages. In contentTop it did not: that container is rendered only
+    // while isShowingPage is true.
+    expect(container.querySelector(".sv-collab-bar")).toBeTruthy();
+
+    plugin.dispose();
   });
 });

@@ -9,7 +9,7 @@ async function joinRoom(context: BrowserContext, name: string, room: string): Pr
   await page.getByTestId("room-input").fill(room);
   await page.getByTestId("join-button").click();
   // Wait until the survey has rendered (room-state received).
-  await expect(page.getByTestId("room-id")).toHaveText(room);
+  await expect(page.locator(".sv-collab-bar")).toContainText(`Room: ${room}`);
   await expect(page.getByText("Project name")).toBeVisible();
   return page;
 }
@@ -27,7 +27,7 @@ test("two participants co-edit one survey response in real time", async ({ brows
   const pageB = await joinRoom(ctxB, "Bob", ROOM);
 
   // Presence: A eventually sees the OTHER participant (self is not shown).
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(1);
+  await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(1);
 
   // A edits the text question -> B sees it.
   const textA = pageA.getByLabel("Project name");
@@ -45,7 +45,7 @@ test("two participants co-edit one survey response in real time", async ({ brows
 
   // Presence: when B leaves, A's roster of others empties.
   await ctxB.close();
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(0);
+  await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(0);
 
   await ctxA.close();
 });
@@ -220,7 +220,7 @@ test("an edit fans out to all participants in a three-person room", async ({ bro
   const pageC = await joinRoom(ctxC, "Carol", ROOM);
 
   // Presence: Alice eventually sees all three participants.
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(2);
+  await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(2);
 
   // A single edit by Alice fans out to both Bob and Carol.
   const textA = pageA.getByLabel("Project name");
@@ -276,7 +276,7 @@ test("reloading rejoins the room and restores previous answers", async ({ browse
   await pageA.reload();
 
   // Her answers are restored from the persisted room state.
-  await expect(pageA.getByTestId("room-id")).toHaveText(ROOM);
+  await expect(pageA.locator(".sv-collab-bar")).toContainText(`Room: ${ROOM}`);
   await expect(pageA.getByLabel("Project name")).toHaveValue("Apollo");
   await expect(pageA.getByRole("radio", { name: "Prototype" })).toBeChecked();
 
@@ -291,23 +291,23 @@ test("the bar shows only the other participants with distinct colors", async ({ 
   const pageA = await joinRoom(ctxA, "Alice", ROOM);
   const pageB = await joinRoom(ctxB, "Bob", ROOM);
 
-  // Each side lists exactly the OTHER participant — never itself.
-  const listA = pageA.getByTestId("participants");
-  await expect(listA.getByRole("listitem")).toHaveCount(1);
-  await expect(listA.getByRole("listitem").filter({ hasText: "Bob" })).toHaveCount(1);
-  await expect(listA.getByText("Alice")).toHaveCount(0);
+  // The bar is the library's action bar now: one avatar button per OTHER
+  // participant, its initials as the label and the full name on the title.
+  const avatarsA = pageA.locator(".sv-collab-bar__avatar");
+  await expect(avatarsA).toHaveCount(1);
+  await expect(pageA.locator('.sv-collab-bar__avatar[title="Bob"]')).toHaveCount(1);
+  await expect(pageA.locator('.sv-collab-bar__avatar[title="Alice"]')).toHaveCount(0);
 
-  const listB = pageB.getByTestId("participants");
-  await expect(listB.getByRole("listitem")).toHaveCount(1);
-  await expect(listB.getByRole("listitem").filter({ hasText: "Alice" })).toHaveCount(1);
-  await expect(listB.getByText("Bob")).toHaveCount(0);
+  const avatarsB = pageB.locator(".sv-collab-bar__avatar");
+  await expect(avatarsB).toHaveCount(1);
+  await expect(pageB.locator('.sv-collab-bar__avatar[title="Alice"]')).toHaveCount(1);
+  await expect(pageB.locator('.sv-collab-bar__avatar[title="Bob"]')).toHaveCount(0);
 
-  // The two participants get different palette colors. The first <span> in
-  // a listitem is the avatar circle carrying the color.
-  const swatchOf = (list: ReturnType<Page["getByTestId"]>) =>
-    list.getByRole("listitem").first().locator("span").first()
-      .evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(await swatchOf(listA)).not.toBe(await swatchOf(listB));
+  // Distinct participants get distinct colours. The colour is a theme slot class
+  // rather than an inline hex, so compare the resolved background.
+  const swatch = (locator: ReturnType<Page["locator"]>) =>
+    locator.first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await swatch(avatarsA)).not.toBe(await swatch(avatarsB));
 
   await ctxA.close();
   await ctxB.close();
@@ -373,7 +373,7 @@ async function joinRoomWithSchema(
     await page.getByTestId("survey-json-input").fill(JSON.stringify(schema));
   }
   await page.getByTestId("join-button").click();
-  await expect(page.getByTestId("room-id")).toHaveText(room);
+  await expect(page.locator(".sv-collab-bar")).toContainText(`Room: ${room}`);
   return page;
 }
 

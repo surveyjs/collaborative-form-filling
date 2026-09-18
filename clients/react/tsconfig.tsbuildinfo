@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/collaborativesurvey.tsx","./src/main.tsx","./src/participantsbar.test.ts","./src/participantsbar.ts","./src/presencesync.test.ts","./src/sync.test.ts","./src/test/setup.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/clientwiring.test.ts","./src/collabbundle.test.ts","./src/filesync.test.ts","./src/main.tsx","./src/surveyrender.test.tsx","./src/test/setup.ts"],"version":"5.9.3"}

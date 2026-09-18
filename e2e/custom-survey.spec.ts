@@ -49,7 +49,7 @@ async function joinRoomWithSchema(
   await page.getByTestId("join-button").click();
   // room-id confirms we left the join form and entered the room; survey-specific
   // assertions in each test wait (auto-retry) for the model to render.
-  await expect(page.getByTestId("room-id")).toHaveText(room);
+  await expect(page.locator(".sv-collab-bar")).toContainText(`Room: ${room}`);
   return page;
 }
 
@@ -133,7 +133,7 @@ test("the join form rejects malformed survey JSON", async ({ browser }) => {
 
   // Validation blocks completion: an inline error shows and we never join.
   await expect(page.getByText(/Invalid JSON/)).toBeVisible();
-  await expect(page.getByTestId("room-id")).toHaveCount(0);
+  await expect(page.locator(".sv-collab-bar")).toHaveCount(0);
 
   await ctx.close();
 });
@@ -148,9 +148,10 @@ test("an emptied room is reclaimed and the next creator's schema applies", async
   await expect(pageA.getByRole("textbox", { name: "q1" })).toBeVisible();
   await ctxA.close();
 
-  // Let the server process the disconnect/prune before re-creating the room.
-  // No UI signal exists for the prune, so this short settle is intentional.
-  await new Promise((r) => setTimeout(r, 750));
+  // Wait out the empty-room grace period before re-creating the room. The grace
+  // exists so a reconnect cannot destroy a room (see emptyRoomTtlMs); there is no
+  // UI signal for the prune, so this settle is intentional.
+  await new Promise((r) => setTimeout(r, 2500));
 
   // Bob re-creates the same room id with a different schema Y (a single `z1`).
   const SCHEMA_Y = { pages: [{ name: "p1", elements: [{ type: "text", name: "z1" }] }] };

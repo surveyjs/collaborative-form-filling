@@ -1,48 +1,92 @@
 # Collaborative Form Filling by SurveyJS
 
-A real-time collaborative survey and form filling service that allows multiple participants to complete the same form simultaneously (similar to Google Docs for for document editing).
+A real-time collaborative survey and form filling service that allows multiple participants to complete the same form simultaneously (similar to Google Docs for document editing).
 
 - **Frontend** &ndash; a lobby plus four framework clients ([SurveyJS](https://surveyjs.io/) everywhere): React, Plain JS (`survey-js-ui`), Vue 3 and Angular
-- **Backend** &ndash; Node + Express + Socket.IO
-- **Storage** &ndash; In-memory (MVP, no database or authentication)
-- **survey-library** &ndash; all clients consume the published SurveyJS 3.x packages from npm (`survey-core` plus the UI package for their framework); all collaboration code (including the participants bar) lives in this repo
+- **Backend** &ndash; Node + Express + a raw WebSocket relay (`ws`)
+- **Storage** &ndash; In-memory rooms plus on-disk file blobs (MVP, no database or authentication)
+- **survey-library** &ndash; all collaboration lives in `survey-core/collaboration`, a separate bundle of the sibling [survey-library](../survey-library) checkout; the clients consume it through `file:` dependencies
 
 ## How It Works
 
-- The repository is laid out as `lobby/` + `clients/{react,js,vue,angular}/` + `server/` + `shared/`.
-- The **lobby** at `/` collects a framework (image picker), display name, room id and an optional custom survey schema, then navigates to `/{framework}/?room=<id>&name=<name>`. A custom schema is registered first via `POST /api/rooms`.
-- Each **client** (`/react/`, `/js/`, `/vue/`, `/angular/`) reads the room and name from the URL and joins over Socket.IO; without `?room=` it redirects back to the lobby.
-- The server stores the survey schema and current responses in memory.
-- When a participant changes a value, the [`onValueChanged`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#onValueChanged) event in SurveyJS is triggered, and the update is broadcast to other participants via Socket.IO.
-- Clients apply incoming updates using [`survey.setValue()`](https://surveyjs.io/form-library/documentation/api-reference/survey-data-model#setValue).
-- Before applying one, the client commits whatever is being typed in the focused field into the model. SurveyJS keeps a text input uncommitted until blur, so those characters live only in the DOM - and the re-render that applying a peer answer triggers would otherwise overwrite them (see [`shared/sync.ts`](shared/sync.ts)).
-- Update loops are prevented by suppressing the echo of the question NAME being applied, rather than by a blanket flag: survey-core writes OTHER questions as a consequence of the one applied (`clearInvisibleValues`, triggers), and those are local changes the peers still need to hear about.
-- Every connection re-joins the room, not just the first one: a reconnect gives the client a new socket id, and room membership is tracked per socket (see [`shared/room.ts`](shared/room.ts)).
-- Conflicts are resolved using a last-write-wins strategy at the individual question level.
-- The framework-agnostic wiring (sync + presence + participants bar) lives in [`shared/room.ts`](shared/room.ts) (`connectRoom`) and is shared by all four clients.
+Collaboration is one plugin registered on a `SurveyModel`. It owns no transport:
+outbound is an event, inbound is a method, and the message vocabulary is the same one
+the relay speaks &mdash; so a client forwards frames both ways without translating them.
+
+```
+answer change   -> plugin.onEvent {type:"value"}    -> server: values.set(key, value)
+                                                    -> {type:"value", from} to the others
+                                                    -> peer: plugin.apply(...)   (echo-suppressed)
+focus / page    -> plugin.onEvent {retain:true}     -> stored, replayed in the next init
+mouse cursor    -> plugin.onEvent {retain:false}    -> relayed, droppable under congestion
+joining         <- {type:"init", seed, values, peers} -> new Model(seed); plugin.apply(init)
+```
+
+The whole client side of a framework app is one file:
+
+```ts
+const survey = new Model(seed);
+attachFileSync({ survey, roomId });                 // not collaboration - see below
+const collab = new CollaborationPlugin(survey, { info, getInviteLink });
+```
+
+Everything else &mdash; the participants bar, the focus rings, the remote cursors, the
+last-write-wins convergence, the rescue of half-typed text &mdash; comes with the plugin.
+No client contains any collaboration markup.
+
+- The **lobby** at `/` collects a framework, display name, room id and an optional custom survey schema, then navigates to `/{framework}/?room=<id>&name=<name>`. A custom schema is registered first via `POST /api/rooms`.
+- The **relay** ([`PROTOCOL.md`](PROTOCOL.md)) stores an opaque `key -> value` map per room and fans changes out. It has **no SurveyJS dependency** and is meant to be portable to another language.
+- Conflicts resolve as last-write-wins per key. There is no CRDT and no operational transform: the collaborative state of a form already is a flat map.
+
+### What the plugin does that is easy to miss
+
+- **Echo suppression is per question name, not a blanket flag.** survey-core writes *other* questions as a consequence of the one being applied (`clearInvisibleValues`, triggers); those are genuine local changes the peers must hear about, because a client that cannot re-derive the cascade would otherwise diverge in silence.
+- **Half-typed text is rescued.** SurveyJS keeps a text input uncommitted until blur, so mid-typing the characters live only in the DOM &mdash; and the re-render that applying a peer's answer causes would overwrite them. The plugin commits the focused editor first.
+- **`init` is authoritative.** It replaces the local values, erasing keys it does not carry. Edits made while disconnected are lost; see `PROTOCOL.md`.
 
 ### Presence
 
-- The **participants bar** (room id, avatar chips of the OTHER participants — self is not shown — and an Invite button that copies the lobby join link) is app chrome rendered by each client ABOVE its Survey component: `connectRoom` hands the host a [`ParticipantsBarModel`](shared/participantsBar.ts) alongside the survey, and the host renders its framework's view of it — React and Plain JS share one [react-family view](shared/participantsBarView.ts) (survey-js-ui re-exports the survey-react-ui API on preact), Vue and Angular ship their own components (`clients/vue/src/ParticipantsBar.vue`, `clients/angular/src/app/participants-bar/`).
-- Each participant's **currently focused question** is broadcast (`focus-question`) and shown to others as a colored ring with a name badge around the question. The focus is stored per participant on the server, so late joiners see it immediately.
-- Each participant's **mouse cursor** is broadcast (`cursor-moved`) as a colored arrow with a name label. Each packet carries a short sampled path (up to 3 points per 50 ms window) anchored to the hovered question — or, outside question blocks, to the nearest question with fractions extrapolated beyond 0..1 — so cursors stay visible anywhere in the window and line up across differently sized windows. Receivers replay the path ~100 ms behind real time with Catmull-Rom interpolation, so remote cursors glide smoothly instead of jumping. Cursor packets are ephemeral: throttled on the client, relayed as volatile, and never stored.
-- See [`shared/presenceSync.ts`](shared/presenceSync.ts) for capture and rendering details.
+The participants bar, the focus rings with name badges and the remote cursors are all
+drawn by the plugin. The bar reaches the screen through survey-core's existing layout
+slot (`addLayoutElement` into `contentTop`, rendered by the action bar the library
+already ships), so it needs no component in any UI package.
 
-## Server Setup
+Cursors are sampled, downsampled to three points per packet, anchored to a question's
+box as fractions, and replayed ~100 ms behind with spline interpolation &mdash; so they
+glide, and a dropped packet is invisible.
 
-- The Express server hosts the lobby, all client applications, the room REST API and Socket.IO on a single port in both development and production.
-- In development, the lobby and the React/JS/Vue clients run as Vite middleware instances with HMR (inline configs — see the note in `index.ts`); the Angular client is always served from its built `dist` (rebuild with `npm run build:angular`).
-- In production, everything is served from the built `dist` folders with SPA fallback routing per mount.
+### What is deliberately NOT in the plugin
 
-See [`server/src/index.ts`](server/src/index.ts).
+File uploads. [`shared/fileSync.ts`](shared/fileSync.ts) only wires survey-core's own
+`onUploadFiles`/`onClearFiles` to this app's blob endpoint and clamps `maxSize`; it
+touches no socket and applies nothing remote. It is ordinary application code, so it
+stays here &mdash; every client calls `attachFileSync` alongside the plugin.
 
-## Running
+## Setup
 
-### Development
+The clients build against the **sibling `survey-library` checkout**, not the npm
+packages: `survey-core/collaboration` is not published yet. Expected layout:
+
+```
+WebstormProjects/
+  survey-library/                 (branch: collaboration-plugin)
+  collaborative-form-filling/     (this repo)
+```
+
+Build the library packages once (from `survey-library`), in dependency order:
+
+```bash
+cd packages/survey-core       && npm run build && npm run build:collaboration
+cd ../survey-react-ui         && npm run build
+cd ../survey-js-ui            && npm run build
+cd ../survey-vue3-ui          && npm run build
+cd ../survey-angular-ui       && npm run build
+```
+
+Then, here:
 
 ```bash
 npm install
-npm run install:angular   # once: the Angular client is not an npm workspace
 npm run build:angular     # once (and after shared changes): /angular/ serves this build
 npm run dev
 ```
@@ -58,9 +102,14 @@ npm run build
 npm start
 ```
 
-`npm run build` compiles the server and builds the lobby and all four clients. `npm start` serves the production build and Socket.IO on [`http://localhost:3001`](http://localhost:3001).
+## Environment
 
-Use the PORT environment variable to override the default port.
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `3001` | HTTP + WebSocket port |
+| `NODE_ENV` | `development` | `production` disables the Vite middleware |
+| `EMPTY_ROOM_TTL_MS` | `2000` | grace period before an empty room is reclaimed |
+| `PRESENCE_PING_MS` | `30000` | WebSocket keepalive interval |
 
 ## Tests
 
@@ -69,8 +118,11 @@ npm test
 npm run test:e2e
 ```
 
-- `npm test` &ndash; Unit tests (Vitest) for the server, sockets, client synchronization logic, and the participants-bar model (`clients/react/src/participantsBar.test.ts` — shared-code tests run under the React client's Vitest).
-- `npm run test:e2e` &ndash; End-to-end tests (Playwright): collaborative editing across browser contexts plus a cross-framework smoke suite (each client co-edits with a React peer). Requires the Angular client to be built (`npm run build:angular`).
+- `npm test` &ndash; Vitest for the relay, the room store, the HTTP endpoints, the protocol constants and the file store, plus the client-side transport and the consumer-side render canary.
+- `npm run test:e2e` &ndash; Playwright: co-editing, custom schemas, presence and a cross-framework suite where each client co-edits with a React peer. Requires `npm run build:angular`.
+
+Plugin-level coverage lives with the plugin, in
+`../survey-library/packages/survey-core/tests/collaboration/`.
 
 Before running E2E tests for the first time, install Playwright browsers:
 
@@ -80,17 +132,20 @@ npm run test:e2e:install
 
 ## Project Structure
 
-- [`shared/events.ts`](shared/events.ts) &ndash; Shared Socket.IO event definitions.
-- [`server/src/index.ts`](server/src/index.ts) &ndash; Express + Socket.IO server, room REST API, lobby/client mounts.
-- [`server/src/RoomManager.ts`](server/src/RoomManager.ts) &ndash; In-memory room state and conflict resolution.
-- [`shared/`](shared/) &ndash; Socket.IO event contracts (`events.ts`) and framework-agnostic client logic shared by all clients: `room.ts` (connectRoom), `sync.ts`, `presenceSync.ts`, `socket.ts`, `customComponents.ts`, `participantsBar.ts` (bar model) + `participantsBarView.ts` (react-family view).
-- [`lobby/`](lobby/) &ndash; The join form with the framework picker (served at `/`).
-- [`clients/react/`](clients/react/) &ndash; React client (`/react/`).
-- [`clients/js/`](clients/js/) &ndash; Plain JS client on `survey-js-ui` (`/js/`).
-- [`clients/vue/`](clients/vue/) &ndash; Vue 3 client (`/vue/`).
-- [`clients/angular/`](clients/angular/) &ndash; Angular client (`/angular/`, built statically, not an npm workspace).
+- [`PROTOCOL.md`](PROTOCOL.md) &ndash; the language-agnostic server specification.
+- [`server/src/protocol.ts`](server/src/protocol.ts) &ndash; wire types and constants, zero imports.
+- [`server/src/relay.ts`](server/src/relay.ts) &ndash; the WebSocket relay.
+- [`server/src/roomStore.ts`](server/src/roomStore.ts) &ndash; the in-memory room model.
+- [`server/src/index.ts`](server/src/index.ts) &ndash; composition plus the lobby/client hosting.
+- [`shared/collab-client.ts`](shared/collab-client.ts) &ndash; the transport shared by all four clients. Zero runtime imports on purpose: each app compiles it against its own copy of survey-core.
+- [`shared/fileSync.ts`](shared/fileSync.ts), [`shared/customComponents.ts`](shared/customComponents.ts) &ndash; application code, not collaboration.
+- [`lobby/`](lobby/), [`clients/react/`](clients/react/), [`clients/js/`](clients/js/), [`clients/vue/`](clients/vue/), [`clients/angular/`](clients/angular/) &ndash; the apps.
 
-<!-- ## License -->
+## Limitations
+
+- In-memory rooms; a restart loses them.
+- No authentication: the byte ceilings are the abuse model.
+- Edits made while disconnected are lost when the connection returns.
 
 ## Related Resources
 

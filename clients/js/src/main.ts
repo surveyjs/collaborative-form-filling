@@ -1,38 +1,45 @@
-import type { Model } from "survey-core";
-import { createElement, render, renderSurvey } from "survey-js-ui";
+import { Model } from "survey-core";
+import { CollaborationPlugin } from "survey-core/collaboration";
+import { renderSurvey } from "survey-js-ui";
 import "survey-core/survey-core.min.css";
-import "../../../shared/presenceSync.css";
+import "survey-core/collaboration.css";
 import "../../../shared/customComponents";
-import { createSocket } from "../../../shared/socket";
-import { connectRoom, getRoomFromUrl, lobbyJoinUrl } from "../../../shared/room";
-import { SurveyParticipantsBar } from "./participantsBar";
+import { attachFileSync } from "../../../shared/fileSync";
+import { connectCollab, getRoomFromUrl, lobbyJoinUrl } from "../../../shared/collab-client";
 
 // The lobby (served at "/") navigates here with ?room=<id>&name=<n>.
-// Without a room there is nothing to render — go back to the lobby.
+// Without a room there is nothing to render - go back to the lobby.
 const { roomId, name } = getRoomFromUrl();
 if (!roomId) {
   window.location.href = "../";
 } else {
   const root = document.getElementById("root")!;
-  const socket = createSocket();
-  connectRoom({
-    socket,
+  connectCollab({
     roomId,
     name,
-    getInviteLink: () => lobbyJoinUrl(roomId),
-    onSurvey: (model: Model, bar) => {
+    // Called once, on the first init: the schema comes from the server, so the model
+    // cannot be built any earlier. A reconnect reuses what this returned.
+    createSurvey: (seed: any) => {
+      const survey = new Model(seed);
+      // Not collaboration: survey-core's own file hooks pointed at this app's
+      // blob endpoint. Attached before any value arrives, so a file question is
+      // already normalized when the room snapshot lands on it.
+      attachFileSync({ survey, roomId });
+      // App layout, not collaboration: make the FORM the scroller rather than the page.
+      // position:sticky binds to the nearest scrolling ancestor, and survey-core always
+      // wraps its content in .sv-scroll__scroller (overflow:auto). When the page scrolls
+      // instead, that wrapper never moves, so nothing inside the form can stick - which
+      // is equally true of survey-core's own top progress bar. Giving the form a definite
+      // height hands scrolling to it and keeps the collaboration strip pinned.
+      survey.fitToContainer = true;
+      if (seed && seed.lazyRenderEnabled === true) survey.lazyRenderEnabled = true;
+      const collab = new CollaborationPlugin(survey, {
+        info: [{ label: "Room", value: roomId }, { label: "Framework", value: "Plain JS" }],
+        getInviteLink: () => lobbyJoinUrl(roomId),
+      });
       root.replaceChildren();
-      // The bar is app chrome above the survey; render both into fresh
-      // containers (the previous models are already disposed by connectRoom).
-      // #root is a flex column: the survey container takes the remaining
-      // height and the survey scrolls inside it (fitToContainer).
-      const barEl = document.createElement("div");
-      const surveyEl = document.createElement("div");
-      surveyEl.style.flex = "1 1 auto";
-      surveyEl.style.minHeight = "0";
-      root.append(barEl, surveyEl);
-      render(createElement(SurveyParticipantsBar, { model: bar }), barEl);
-      renderSurvey(model, surveyEl);
+      renderSurvey(survey, root);
+      return collab;
     },
   });
 }

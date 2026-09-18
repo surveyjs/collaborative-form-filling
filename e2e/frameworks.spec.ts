@@ -22,7 +22,7 @@ async function joinVia(
     .click();
   await page.getByTestId("name-input").fill(name);
   await page.getByTestId("join-button").click();
-  await expect(page.getByTestId("room-id")).toHaveText(room);
+  await expect(page.locator(".sv-collab-bar")).toContainText(`Room: ${room}`);
   await expect(page.getByText("Project name")).toBeVisible();
   return page;
 }
@@ -54,11 +54,9 @@ for (const fw of [
     expect(new URL(pageB.url()).pathname).toBe(`/${fw.prefix}/`);
 
     // Each side's bar lists exactly the OTHER participant (self is hidden).
-    await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(1);
-    await expect(pageB.getByTestId("participants").getByRole("listitem")).toHaveCount(1);
-    await expect(
-      pageB.getByTestId("participants").getByRole("listitem").filter({ hasText: "Alice" }),
-    ).toHaveCount(1);
+    await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(1);
+    await expect(pageB.locator(".sv-collab-bar__avatar")).toHaveCount(1);
+    await expect(pageB.locator('.sv-collab-bar__avatar[title="Alice"]')).toHaveCount(1);
 
     // B edits -> A sees it; A edits -> B sees it.
     const textB = pageB.getByLabel("Project name");
@@ -73,7 +71,7 @@ for (const fw of [
 
     // B leaving empties A's roster of others.
     await ctxB.close();
-    await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(0);
+    await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(0);
     await ctxA.close();
   });
 }

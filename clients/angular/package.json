@@ -17,10 +17,9 @@
     "@angular/platform-browser-dynamic": "~12.2.0",
     "@angular/router": "~12.2.0",
     "rxjs": "~6.6.0",
-    "socket.io-client": "^4.8.1",
-    "survey-angular-ui": "^3.0.0",
+    "survey-angular-ui": "file:../../../survey-library/packages/survey-angular-ui/build",
     "survey-collaboration": "file:../..",
-    "survey-core": "^3.0.0",
+    "survey-core": "file:../../../survey-library/packages/survey-core/build",
     "tslib": "^2.3.0",
     "zone.js": "~0.11.4"
   },

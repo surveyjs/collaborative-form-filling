@@ -1,15 +1,10 @@
 import { createReadStream } from "node:fs";
 import express, { type Express, type Request, type Response } from "express";
 import type { FileStore } from "./FileStore.js";
-import { ROOM_ID_RE, type RoomManager } from "./RoomManager.js";
+import { MAX_FILE_BYTES, ROOM_ID_RE } from "./protocol.js";
 
-/**
- * Per-file ceiling, mirroring MAX_FILE_BYTES in shared/fileSync.ts — keep the
- * two in sync. The client clamps a file question's `maxSize` to it so an
- * oversized pick fails with a visible message; this copy is what actually
- * enforces it, since a client may not run that clamp at all.
- */
-export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export { MAX_FILE_BYTES };
+
 
 /**
  * Content types served inline. Everything else is handed over as an
@@ -38,7 +33,7 @@ function headerSafeName(name: string): string {
  * so the existing two-segment `GET /api/rooms/:id` stays independent of mount
  * order — Express matches segment counts exactly, so the two never collide.
  */
-export function createFileRoutes(app: Express, rooms: RoomManager, files: FileStore): void {
+export function createFileRoutes(app: Express, hasRoom: (roomId: string) => boolean, files: FileStore): void {
   const raw = express.raw({ type: "*/*", limit: MAX_FILE_BYTES });
 
   app.post("/api/rooms/:roomId/files", raw, (req: Request, res: Response) => {
@@ -50,7 +45,7 @@ export function createFileRoutes(app: Express, rooms: RoomManager, files: FileSt
     // Deliberately NOT getOrCreate: an upload must not conjure a room. Rooms
     // are pruned when their last participant leaves, so a room nobody ever
     // joined would have no one to clean it up.
-    if (!rooms.get(roomId)) {
+    if (!hasRoom(roomId)) {
       res.status(404).json({ error: "room not found" });
       return;
     }

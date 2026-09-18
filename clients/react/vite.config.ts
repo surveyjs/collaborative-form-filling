@@ -26,7 +26,6 @@ export default defineConfig({
         manualChunks: {
           react: ["react", "react-dom"],
           survey: ["survey-core", "survey-react-ui"],
-          socket: ["socket.io-client"],
         },
       },
     },
