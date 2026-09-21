@@ -153,7 +153,14 @@ export interface IInitMsg {
   peers: Array<IPresencePeerEntry>;
 }
 
-/** A peer's edit, sent to everyone but the author. `from` is for debugging. */
+/**
+ * A peer's edit, sent to everyone but the author.
+ *
+ * `from` takes no part in convergence - last write wins per key, whoever wrote it -
+ * and the server does not store it: `values` is a key -> value map with no authors in
+ * it. What reads it is the client's session history ("who changed what while I was
+ * here"), which is why the field is stamped even though the relay never needs it.
+ */
 export interface IValueBroadcastMsg {
   type: "value";
   from: string;

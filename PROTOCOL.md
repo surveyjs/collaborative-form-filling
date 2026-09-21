@@ -99,6 +99,12 @@ peer's edit cannot land between them and be erased by a state that does not cont
 yet. `seed` and the identity triple `clientId`/`name`/`colorIndex` are for the host; the
 plugin reads `values` and `peers` and ignores the rest.
 
+`from` on a relayed `value` is **attribution, not routing**. It takes no part in
+convergence - last write wins per key, whoever wrote it - and the server never stores
+it: `values` is a key -> value map with no authors in it. A client uses it to keep the
+session history below. A server that omits it stays interoperable; those edits then
+read as coming from someone unknown.
+
 ### Client → server
 
 ```jsonc
@@ -191,6 +197,24 @@ room with the default survey.
 3. **No echo.** Never send a client its own message back.
 
 Nothing else is required: conflict resolution is entirely client-side.
+
+## Change history
+
+Optional, and entirely a **client** concern: nothing of it is on the wire beyond `from`.
+
+The collaboration plugin keeps an in-memory log of the edits it has witnessed - author,
+question, a short description of the value - for the lifetime of one connection, and
+shows it in the strip above the form. The scope is deliberately that narrow:
+
+- **The server has no history.** It keeps a snapshot map, which is what makes a late
+  joiner `O(questions)` rather than `O(edits)`; a log would grow without bound.
+- **`init.values` carries no authorship**, so whatever happened before this client
+  connected is anonymous - the log starts empty.
+- **Every `init` clears it.** A reconnect replaces the local state wholesale, so
+  entries recorded before it describe a state that is no longer there.
+
+A durable, cross-session audit trail is a different feature: it needs storage on the
+server, a retention policy, and a way to read it back.
 
 ## Keepalive and reconnect
 

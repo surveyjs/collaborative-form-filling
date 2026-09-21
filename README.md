@@ -55,6 +55,22 @@ Cursors are sampled, downsampled to three points per packet, anchored to a quest
 box as fractions, and replayed ~100 ms behind with spline interpolation &mdash; so they
 glide, and a dropped packet is invisible.
 
+### Change history
+
+The **Changes** button in the strip opens a panel beside the form &mdash; who edited
+which question, and to what, for as long as this connection lasts. While it is open
+the survey container is a two-column grid, so the panel runs from under the strip to
+the bottom and the form gives way instead of being covered. It stays put while the
+form scrolls past it &mdash; only its list moves &mdash; which takes a measurement:
+nothing in survey-core publishes the height of the sticky strip, so the panel reads
+it and hands it to CSS. On a narrow screen it moves straight under the strip instead
+and stops being pinned. It costs nothing on the wire &mdash; the
+attribution rides on the `from` the relay already stamps onto every value it fans out.
+
+The scope is the connection, not the room: the server keeps a snapshot map with no
+authors in it, `init.values` carries no authorship, and every `init` clears the log.
+A durable audit trail would be a different feature; see [`PROTOCOL.md`](PROTOCOL.md).
+
 ### What is deliberately NOT in the plugin
 
 File uploads. [`shared/fileSync.ts`](shared/fileSync.ts) only wires survey-core's own

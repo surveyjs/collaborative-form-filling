@@ -483,3 +483,105 @@ test("a reconnected participant keeps syncing and stays on their page", async ({
   await ctxA.close();
   await ctxB.close();
 });
+
+test("the strip keeps a session history of who changed what", async ({ browser }) => {
+  const ROOM = "e2e-history";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  // The button is there from the start, like Invite, and opens a panel beside the
+  // form rather than a popup over it.
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  const panelB = pageB.locator(".sv-collab-changes");
+  await expect(panelB).toBeVisible();
+  await expect(panelB.getByText("Nothing has changed yet")).toBeVisible();
+
+  const textA = pageA.getByLabel("Project name");
+  await textA.fill("Apollo");
+  await textA.blur();
+  await expect(pageB.getByLabel("Project name")).toHaveValue("Apollo");
+
+  // The open panel picks the edit up, and says who made it. The attribution rides on
+  // `from`, which the relay stamps onto every value it fans out.
+  const firstRow = panelB.locator(".sv-collab-changes__row").first();
+  await expect(firstRow).toContainText("Alice");
+  await expect(firstRow).toContainText("Project name");
+  await expect(firstRow).toContainText("Apollo");
+  await expect(firstRow.locator(".sv-collab-changes__avatar")).toHaveText("AL");
+
+  // Bob's own answers are in the same list, as his.
+  await pageB.getByText("Prototype", { exact: true }).click();
+  await expect(panelB.locator(".sv-collab-changes__row").first()).toContainText("You");
+
+  // Alice leaves: her avatar goes from the strip, but what she did keeps her name -
+  // the entry holds a snapshot rather than a lookup into a roster she has left.
+  await ctxA.close();
+  await expect(pageB.locator(".sv-collab-bar__avatar")).toHaveCount(0);
+  await expect(panelB.locator(".sv-collab-changes__row").filter({ hasText: "Alice" })).toHaveCount(1);
+
+  // The button is a toggle.
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  await expect(panelB).toHaveCount(0);
+
+  // A reload is a new connection, and its init replaces the state wholesale: the
+  // history starts over rather than describing a state that is gone.
+  await pageB.reload();
+  await expect(pageB.getByLabel("Project name")).toHaveValue("Apollo");
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  await expect(pageB.locator(".sv-collab-changes").getByText("Nothing has changed yet")).toBeVisible();
+
+  await ctxB.close();
+});
+
+test("the changes panel stays put while the form scrolls", async ({ browser }) => {
+  const ROOM = "e2e-history-scroll";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  // Enough entries that the list is taller than the panel and has somewhere to go.
+  const textA = pageA.getByLabel("Project name");
+  for (const value of ["one", "two", "three", "four", "five", "six", "seven", "eight"]) {
+    await textA.fill(value);
+    await textA.blur();
+    // Past the merge window, so each edit is its own row rather than one merged one.
+    await pageA.waitForTimeout(1600);
+  }
+  await expect(pageB.getByLabel("Project name")).toHaveValue("eight");
+
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  const panel = pageB.locator(".sv-collab-changes");
+  const list = pageB.locator(".sv-collab-changes__list");
+  await expect(panel).toBeVisible();
+
+  const panelBefore = await panel.boundingBox();
+  const formBefore = await pageB.getByLabel("Project name").boundingBox();
+
+  // The form scrolls inside survey-core's own scroller, not the window: the client
+  // sets fitToContainer, which is also what lets the strip stick.
+  await pageB.locator(".sv-scroll__scroller").evaluate((el) => { el.scrollTop = 400; });
+  await pageB.waitForTimeout(300);
+
+  const panelAfter = await panel.boundingBox();
+  const formAfter = await pageB.getByLabel("Project name").boundingBox();
+
+  // The form moved; the panel did not.
+  expect(formAfter!.y).toBeLessThan(formBefore!.y - 100);
+  expect(Math.abs(panelAfter!.y - panelBefore!.y)).toBeLessThan(2);
+
+  // Its list is the only thing inside that scrolls, and it has room to.
+  const scrolled = await list.evaluate((el) => {
+    el.scrollTop = 120;
+    return { top: el.scrollTop, overflow: el.scrollHeight - el.clientHeight };
+  });
+  expect(scrolled.overflow).toBeGreaterThan(0);
+  expect(scrolled.top).toBeGreaterThan(0);
+  // Scrolling the list leaves the panel itself where it was.
+  expect(Math.abs((await panel.boundingBox())!.y - panelBefore!.y)).toBeLessThan(2);
+
+  await ctxA.close();
+  await ctxB.close();
+});
