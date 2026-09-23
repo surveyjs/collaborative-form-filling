@@ -10,11 +10,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400..700&display=swap">
     <style>
-      html, body { margin: 0; }
-      /* Flex column: the bar keeps its own height, the survey gets the rest
-         and scrolls internally. overflow:hidden prevents a second page-level
-         scrollbar of the bar's height. */
-      main { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+      /* fitToContainer gives the survey root height:100%; it needs a definite
+         height all the way up to <html> to resolve against. */
+      html, body { margin: 0; height: 100%; }
+      #root { height: 100%; }
     </style>
   </head>
   <body>

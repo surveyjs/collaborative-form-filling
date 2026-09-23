@@ -13,9 +13,13 @@
   <!-- Loaded as verbatim assets, not through angular.json "styles": the
        Angular 12 postcss pipeline chokes on survey-core's modern CSS. -->
   <link rel="stylesheet" href="survey-core.min.css">
-  <link rel="stylesheet" href="presenceSync.css">
+  <link rel="stylesheet" href="collaboration.css">
   <style>
-    html, body { margin: 0; }
+    /* fitToContainer gives the survey root height:100%; it needs a definite
+       height all the way up to <html> to resolve against. app-root and survey are
+       custom elements, so they are inline until told otherwise. */
+    html, body { margin: 0; height: 100%; }
+    app-root, app-root > survey { display: block; height: 100%; }
   </style>
 </head>
 <body>

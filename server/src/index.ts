@@ -3,31 +3,13 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import { Server } from "socket.io";
 import type { PluginOption } from "vite";
-import type {
-  ClientToServerEvents,
-  ServerToClientEvents,
-} from "../../shared/events.js";
-import { ROOM_ID_RE, RoomManager } from "./RoomManager.js";
 import { FileStore } from "./FileStore.js";
 import { createFileRoutes } from "./fileRoutes.js";
-
-/**
- * Ceiling on one question's value, mirroring the client guard in
- * shared/sync.ts (MAX_VALUE_CHARS) — keep the two in sync. A client that does
- * not run that guard (an older build, someone else's client) must not be able
- * to park an oversized answer in a room or have it rebroadcast to everyone.
- *
- * Sized for a file question left on survey-core's `storeDataAsText: true`,
- * where the file's bytes ARE the value: 10 MiB of file becomes ~13.4 MiB of
- * base64 (x4/3) plus the data-URL prefix and the JSON wrapper. The three
- * limits form one chain and must keep their order:
- *
- *   MAX_FILE_BYTES x 4/3  <  MAX_VALUE_CHARS  <  maxHttpBufferSize
- *         13.4 MiB        <      16 MiB       <      20 MiB
- */
-const MAX_VALUE_CHARS = 16 * 1024 * 1024;
+import { defaultSurvey } from "./defaultSurvey.js";
+import { RoomStore } from "./roomStore.js";
+import { createHttpRooms } from "./httpRooms.js";
+import { attachRelay } from "./relay.js";
 
 const PORT = Number(process.env.PORT) || 3001;
 const isProd = process.env.NODE_ENV === "production";
@@ -51,133 +33,20 @@ const LOBBY_ROOT = path.join(repoRoot, "lobby");
 
 const app = express();
 app.use(express.json());
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
-// Room lookup, used by the lobby to tell "join" from "create" while the user
-// types a room id (drives the conditional schema block and the hint text).
-app.get("/api/rooms/:id", (req, res) => {
-  const id = req.params.id;
-  if (!ROOM_ID_RE.test(id)) {
-    res.status(400).json({ error: "invalid room id" });
-    return;
-  }
-  const room = rooms.get(id);
-  if (!room) {
-    res.status(404).json({ exists: false });
-    return;
-  }
-  res.json({ roomId: id, exists: true, participantCount: room.participants.size });
-});
-
-// Room creation API, used by the lobby when the creator supplies a custom
-// schema (clients themselves join by room id only, over the socket).
-app.post("/api/rooms", (req, res) => {
-  const body = (req.body ?? {}) as { roomId?: unknown; surveyJson?: unknown };
-  if (typeof body.roomId !== "string" || !ROOM_ID_RE.test(body.roomId)) {
-    res.status(400).json({ error: "invalid room id" });
-    return;
-  }
-  if (
-    body.surveyJson !== undefined &&
-    (typeof body.surveyJson !== "object" || body.surveyJson === null || Array.isArray(body.surveyJson))
-  ) {
-    res.status(400).json({ error: "invalid survey schema" });
-    return;
-  }
-  if (rooms.get(body.roomId)) {
-    // The schema of an existing room is fixed at creation time.
-    res.status(409).json({ error: "room already exists", roomId: body.roomId });
-    return;
-  }
-  rooms.getOrCreate(body.roomId, body.surveyJson as object | undefined);
-  res.status(201).json({ roomId: body.roomId });
-});
-
 const httpServer = createServer(app);
-interface SocketData {
-  roomId?: string;
-}
 
-const io = new Server<
-  ClientToServerEvents,
-  ServerToClientEvents,
-  Record<string, never>,
-  SocketData
->(httpServer, {
-  cors: { origin: "*" },
-  // engine.io defaults to 1e6 bytes and enforces it by refusing the oversized
-  // frame and closing the connection (ws code 1009) — a dropped socket with
-  // nothing said. A file question on `storeDataAsText: true` puts the file's
-  // own base64 in the value, so this has to clear MAX_VALUE_CHARS plus packet
-  // framing (see the chain documented above it). The MVP has no auth, so every
-  // extra megabyte is memory any client can make the server hold — this is the
-  // ceiling of that exposure, not a free parameter.
-  maxHttpBufferSize: 20 * 1024 * 1024,
-});
-
-const rooms = new RoomManager();
 const files = new FileStore();
-createFileRoutes(app, rooms, files);
-
-io.on("connection", (socket) => {
-  socket.on("join-room", ({ roomId, name, surveyJson }) => {
-    const participant = rooms.join(roomId, socket.id, name, surveyJson);
-    socket.join(roomId);
-    socket.data.roomId = roomId;
-
-    const room = rooms.getOrCreate(roomId);
-    socket.emit("room-state", {
-      surveyJson: room.surveyJson,
-      data: room.data,
-      selfId: socket.id,
-      participants: rooms.listParticipants(roomId),
-    });
-    socket.to(roomId).emit("participant-joined", { participant });
-  });
-
-  socket.on("value-changed", ({ roomId, name, value }) => {
-    const serialized = JSON.stringify(value);
-    if (serialized !== undefined && serialized.length > MAX_VALUE_CHARS) {
-      console.warn(`[server] dropped an oversized value for "${name}" in room ${roomId}`);
-      return;
-    }
-    rooms.setValue(roomId, name, value);
-    socket.to(roomId).emit("value-changed", { roomId, name, value });
-  });
-
-  socket.on("focus-question", ({ roomId, name }) => {
-    rooms.setFocus(roomId, socket.id, name);
-    socket.to(roomId).emit("focus-question", { id: socket.id, name });
-  });
-
-  socket.on("page-changed", ({ roomId, name }) => {
-    rooms.setPage(roomId, socket.id, name);
-    socket.to(roomId).emit("page-changed", { id: socket.id, name });
-  });
-
-  // Cursor paths are ephemeral: relayed but never stored, and sent as
-  // volatile so packets are dropped (not queued) for congested clients —
-  // every packet is a self-contained path segment, so loss shows only as a
-  // small gap the receiver's replay glides over.
-  socket.on("cursor-moved", ({ roomId, name, points }) => {
-    socket.to(roomId).volatile.emit("cursor-moved", { id: socket.id, name, points });
-  });
-
-  socket.on("disconnect", () => {
-    const left = rooms.leave(socket.id);
-    if (left) {
-      socket.to(left.roomId).emit("participant-left", { id: socket.id });
-      // `leave` returns the roomId whether or not it pruned the room, so ask
-      // whether the room is still there rather than widening its signature —
-      // socket.test.ts mirrors this wiring and would drift otherwise.
-      if (!rooms.get(left.roomId)) {
-        files
-          .deleteRoom(left.roomId)
-          .catch((error) => console.warn("[files] failed to clean up a room", error));
-      }
-    }
-  });
+const store = new RoomStore({
+  defaultSeed: defaultSurvey,
+  emptyRoomTtlMs: process.env.EMPTY_ROOM_TTL_MS !== undefined
+    ? Number(process.env.EMPTY_ROOM_TTL_MS)
+    : undefined,
+  onRoomDeleted: (id) =>
+    files.deleteRoom(id).catch((error) => console.warn("[files] failed to clean up a room", error)),
 });
+createHttpRooms(app, store);
+createFileRoutes(app, (roomId) => !!store.get(roomId), files);
+attachRelay(httpServer, store);
 
 /** Static mount with an SPA fallback onto the app's index.html. */
 function mountDist(prefix: string, dist: string): boolean {
@@ -290,4 +159,4 @@ httpServer.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT}`);
 });
 
-export { io, httpServer, rooms, files };
+export { httpServer, store, files };

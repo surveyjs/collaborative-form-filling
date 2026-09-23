@@ -18,6 +18,9 @@ export default defineConfig({
     command: "npm run dev",
     url: "http://localhost:3001/health",
     reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
+    // Booting Express + four Vite middleware instances takes a while, and the
+    // first run after the survey packages are (re)linked is slower still: Vite
+    // re-optimizes the linked dependencies from scratch.
+    timeout: 180_000,
   },
 });

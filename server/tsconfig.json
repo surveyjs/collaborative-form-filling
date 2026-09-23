@@ -11,6 +11,5 @@
     "rootDir": "src",
     "types": ["node"]
   },
-  "references": [{ "path": "../shared" }],
   "include": ["src/**/*.ts"]
 }

@@ -3,10 +3,9 @@ import { BrowserModule } from "@angular/platform-browser";
 import { SurveyModule } from "survey-angular-ui";
 
 import { AppComponent } from "./app.component";
-import { ParticipantsBarComponent } from "./participants-bar/participants-bar.component";
 
 @NgModule({
-  declarations: [AppComponent, ParticipantsBarComponent],
+  declarations: [AppComponent],
   imports: [BrowserModule, SurveyModule],
   bootstrap: [AppComponent]
 })

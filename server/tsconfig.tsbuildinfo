@@ -1,1 +1,1 @@
-{"root":["./src/filestore.ts","./src/roommanager.test.ts","./src/roommanager.ts","./src/defaultsurvey.ts","./src/fileroutes.ts","./src/index.ts","./src/socket.test.ts"],"version":"5.9.3"}
+{"root":["./src/filestore.test.ts","./src/filestore.ts","./src/defaultsurvey.ts","./src/fileroutes.test.ts","./src/fileroutes.ts","./src/httprooms.test.ts","./src/httprooms.ts","./src/index.ts","./src/protocol.test.ts","./src/protocol.ts","./src/relay.test.ts","./src/relay.ts","./src/roomstore.ts"],"version":"5.9.3"}

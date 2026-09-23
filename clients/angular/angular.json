@@ -23,7 +23,7 @@
             "preserveSymlinks": true,
             "assets": [
               { "glob": "survey-core.min.css", "input": "./node_modules/survey-core", "output": "/" },
-              { "glob": "presenceSync.css", "input": "../../shared", "output": "/" }
+              { "glob": "collaboration.css", "input": "./node_modules/survey-core", "output": "/" }
             ],
             "styles": [],
             "scripts": []

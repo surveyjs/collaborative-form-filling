@@ -9,7 +9,7 @@ async function joinRoom(context: BrowserContext, name: string, room: string): Pr
   await page.getByTestId("room-input").fill(room);
   await page.getByTestId("join-button").click();
   // Wait until the survey has rendered (room-state received).
-  await expect(page.getByTestId("room-id")).toHaveText(room);
+  await expect(page.locator(".sv-collab-bar")).toContainText(`Room: ${room}`);
   await expect(page.getByText("Project name")).toBeVisible();
   return page;
 }
@@ -27,7 +27,7 @@ test("two participants co-edit one survey response in real time", async ({ brows
   const pageB = await joinRoom(ctxB, "Bob", ROOM);
 
   // Presence: A eventually sees the OTHER participant (self is not shown).
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(1);
+  await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(1);
 
   // A edits the text question -> B sees it.
   const textA = pageA.getByLabel("Project name");
@@ -45,7 +45,7 @@ test("two participants co-edit one survey response in real time", async ({ brows
 
   // Presence: when B leaves, A's roster of others empties.
   await ctxB.close();
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(0);
+  await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(0);
 
   await ctxA.close();
 });
@@ -220,7 +220,7 @@ test("an edit fans out to all participants in a three-person room", async ({ bro
   const pageC = await joinRoom(ctxC, "Carol", ROOM);
 
   // Presence: Alice eventually sees all three participants.
-  await expect(pageA.getByTestId("participants").getByRole("listitem")).toHaveCount(2);
+  await expect(pageA.locator(".sv-collab-bar__avatar")).toHaveCount(2);
 
   // A single edit by Alice fans out to both Bob and Carol.
   const textA = pageA.getByLabel("Project name");
@@ -276,7 +276,7 @@ test("reloading rejoins the room and restores previous answers", async ({ browse
   await pageA.reload();
 
   // Her answers are restored from the persisted room state.
-  await expect(pageA.getByTestId("room-id")).toHaveText(ROOM);
+  await expect(pageA.locator(".sv-collab-bar")).toContainText(`Room: ${ROOM}`);
   await expect(pageA.getByLabel("Project name")).toHaveValue("Apollo");
   await expect(pageA.getByRole("radio", { name: "Prototype" })).toBeChecked();
 
@@ -291,23 +291,23 @@ test("the bar shows only the other participants with distinct colors", async ({ 
   const pageA = await joinRoom(ctxA, "Alice", ROOM);
   const pageB = await joinRoom(ctxB, "Bob", ROOM);
 
-  // Each side lists exactly the OTHER participant — never itself.
-  const listA = pageA.getByTestId("participants");
-  await expect(listA.getByRole("listitem")).toHaveCount(1);
-  await expect(listA.getByRole("listitem").filter({ hasText: "Bob" })).toHaveCount(1);
-  await expect(listA.getByText("Alice")).toHaveCount(0);
+  // The bar is the library's action bar now: one avatar button per OTHER
+  // participant, its initials as the label and the full name on the title.
+  const avatarsA = pageA.locator(".sv-collab-bar__avatar");
+  await expect(avatarsA).toHaveCount(1);
+  await expect(pageA.locator('.sv-collab-bar__avatar[title="Bob"]')).toHaveCount(1);
+  await expect(pageA.locator('.sv-collab-bar__avatar[title="Alice"]')).toHaveCount(0);
 
-  const listB = pageB.getByTestId("participants");
-  await expect(listB.getByRole("listitem")).toHaveCount(1);
-  await expect(listB.getByRole("listitem").filter({ hasText: "Alice" })).toHaveCount(1);
-  await expect(listB.getByText("Bob")).toHaveCount(0);
+  const avatarsB = pageB.locator(".sv-collab-bar__avatar");
+  await expect(avatarsB).toHaveCount(1);
+  await expect(pageB.locator('.sv-collab-bar__avatar[title="Alice"]')).toHaveCount(1);
+  await expect(pageB.locator('.sv-collab-bar__avatar[title="Bob"]')).toHaveCount(0);
 
-  // The two participants get different palette colors. The first <span> in
-  // a listitem is the avatar circle carrying the color.
-  const swatchOf = (list: ReturnType<Page["getByTestId"]>) =>
-    list.getByRole("listitem").first().locator("span").first()
-      .evaluate((el) => getComputedStyle(el).backgroundColor);
-  expect(await swatchOf(listA)).not.toBe(await swatchOf(listB));
+  // Distinct participants get distinct colours. The colour is a theme slot class
+  // rather than an inline hex, so compare the resolved background.
+  const swatch = (locator: ReturnType<Page["locator"]>) =>
+    locator.first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await swatch(avatarsA)).not.toBe(await swatch(avatarsB));
 
   await ctxA.close();
   await ctxB.close();
@@ -373,7 +373,7 @@ async function joinRoomWithSchema(
     await page.getByTestId("survey-json-input").fill(JSON.stringify(schema));
   }
   await page.getByTestId("join-button").click();
-  await expect(page.getByTestId("room-id")).toHaveText(room);
+  await expect(page.locator(".sv-collab-bar")).toContainText(`Room: ${room}`);
   return page;
 }
 
@@ -479,6 +479,108 @@ test("a reconnected participant keeps syncing and stays on their page", async ({
 
   await pageB.getByText("c2", { exact: true }).click();
   await expect(pageA.getByRole("checkbox", { name: "c2" })).toBeChecked();
+
+  await ctxA.close();
+  await ctxB.close();
+});
+
+test("the strip keeps a session history of who changed what", async ({ browser }) => {
+  const ROOM = "e2e-history";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  // The button is there from the start, like Invite, and opens a panel beside the
+  // form rather than a popup over it.
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  const panelB = pageB.locator(".sv-collab-changes");
+  await expect(panelB).toBeVisible();
+  await expect(panelB.getByText("Nothing has changed yet")).toBeVisible();
+
+  const textA = pageA.getByLabel("Project name");
+  await textA.fill("Apollo");
+  await textA.blur();
+  await expect(pageB.getByLabel("Project name")).toHaveValue("Apollo");
+
+  // The open panel picks the edit up, and says who made it. The attribution rides on
+  // `from`, which the relay stamps onto every value it fans out.
+  const firstRow = panelB.locator(".sv-collab-changes__row").first();
+  await expect(firstRow).toContainText("Alice");
+  await expect(firstRow).toContainText("Project name");
+  await expect(firstRow).toContainText("Apollo");
+  await expect(firstRow.locator(".sv-collab-changes__avatar")).toHaveText("AL");
+
+  // Bob's own answers are in the same list, as his.
+  await pageB.getByText("Prototype", { exact: true }).click();
+  await expect(panelB.locator(".sv-collab-changes__row").first()).toContainText("You");
+
+  // Alice leaves: her avatar goes from the strip, but what she did keeps her name -
+  // the entry holds a snapshot rather than a lookup into a roster she has left.
+  await ctxA.close();
+  await expect(pageB.locator(".sv-collab-bar__avatar")).toHaveCount(0);
+  await expect(panelB.locator(".sv-collab-changes__row").filter({ hasText: "Alice" })).toHaveCount(1);
+
+  // The button is a toggle.
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  await expect(panelB).toHaveCount(0);
+
+  // A reload is a new connection, and its init replaces the state wholesale: the
+  // history starts over rather than describing a state that is gone.
+  await pageB.reload();
+  await expect(pageB.getByLabel("Project name")).toHaveValue("Apollo");
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  await expect(pageB.locator(".sv-collab-changes").getByText("Nothing has changed yet")).toBeVisible();
+
+  await ctxB.close();
+});
+
+test("the changes panel stays put while the form scrolls", async ({ browser }) => {
+  const ROOM = "e2e-history-scroll";
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await joinRoom(ctxA, "Alice", ROOM);
+  const pageB = await joinRoom(ctxB, "Bob", ROOM);
+
+  // Enough entries that the list is taller than the panel and has somewhere to go.
+  const textA = pageA.getByLabel("Project name");
+  for (const value of ["one", "two", "three", "four", "five", "six", "seven", "eight"]) {
+    await textA.fill(value);
+    await textA.blur();
+    // Past the merge window, so each edit is its own row rather than one merged one.
+    await pageA.waitForTimeout(1600);
+  }
+  await expect(pageB.getByLabel("Project name")).toHaveValue("eight");
+
+  await pageB.getByRole("button", { name: "Changes" }).click();
+  const panel = pageB.locator(".sv-collab-changes");
+  const list = pageB.locator(".sv-collab-changes__list");
+  await expect(panel).toBeVisible();
+
+  const panelBefore = await panel.boundingBox();
+  const formBefore = await pageB.getByLabel("Project name").boundingBox();
+
+  // The form scrolls inside survey-core's own scroller, not the window: the client
+  // sets fitToContainer, which is also what lets the strip stick.
+  await pageB.locator(".sv-scroll__scroller").evaluate((el) => { el.scrollTop = 400; });
+  await pageB.waitForTimeout(300);
+
+  const panelAfter = await panel.boundingBox();
+  const formAfter = await pageB.getByLabel("Project name").boundingBox();
+
+  // The form moved; the panel did not.
+  expect(formAfter!.y).toBeLessThan(formBefore!.y - 100);
+  expect(Math.abs(panelAfter!.y - panelBefore!.y)).toBeLessThan(2);
+
+  // Its list is the only thing inside that scrolls, and it has room to.
+  const scrolled = await list.evaluate((el) => {
+    el.scrollTop = 120;
+    return { top: el.scrollTop, overflow: el.scrollHeight - el.clientHeight };
+  });
+  expect(scrolled.overflow).toBeGreaterThan(0);
+  expect(scrolled.top).toBeGreaterThan(0);
+  // Scrolling the list leaves the panel itself where it was.
+  expect(Math.abs((await panel.boundingBox())!.y - panelBefore!.y)).toBeLessThan(2);
 
   await ctxA.close();
   await ctxB.close();

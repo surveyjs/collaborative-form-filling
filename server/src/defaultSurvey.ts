@@ -108,6 +108,10 @@ export const defaultSurvey = {
           name: "notes",
           title: "Additional notes",
         },
+        {
+          type: "shippingaddress",
+          name: "shipping",
+        },
       ],
     },
   ],

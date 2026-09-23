@@ -6,15 +6,15 @@ import express from "express";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FileStore } from "./FileStore.js";
 import { createFileRoutes, MAX_FILE_BYTES } from "./fileRoutes.js";
-import { RoomManager } from "./RoomManager.js";
+import { RoomStore } from "./roomStore.js";
 
 /**
  * The routes live in their own module precisely so they can be mounted on a
  * bare Express app here — importing index.ts would boot Vite and bind a port.
  */
-function start(rooms: RoomManager, files: FileStore): Promise<{ http: HttpServer; base: string }> {
+function start(rooms: RoomStore, files: FileStore): Promise<{ http: HttpServer; base: string }> {
   const app = express();
-  createFileRoutes(app, rooms, files);
+  createFileRoutes(app, (roomId) => !!rooms.get(roomId), files);
   const http = createServer(app);
   return new Promise((resolve) => {
     http.listen(0, () => {
@@ -46,12 +46,12 @@ describe("file routes", () => {
   let root: string;
   let http: HttpServer;
   let base: string;
-  let rooms: RoomManager;
+  let rooms: RoomStore;
   let files: FileStore;
 
   async function serve(maxRoomBytes?: number) {
     files = new FileStore(root, maxRoomBytes);
-    rooms = new RoomManager();
+    rooms = new RoomStore();
     ({ http, base } = await start(rooms, files));
   }
 

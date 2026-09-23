@@ -11,6 +11,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400..700&display=swap">
   <style>
+    /* fitToContainer gives the survey root height:100%; it needs a definite
+       height all the way up to <html> to resolve against. */
+    html, body { height: 100%; }
+    #root { height: 100%; }
     body.type_embedded .sd-title.sd-container-modern__title {
       display: none;
     }
