@@ -80,8 +80,13 @@ stays here &mdash; every client calls `attachFileSync` alongside the plugin.
 
 ## Setup
 
-The clients build against the **sibling `survey-library` checkout**, not the npm
-packages: `survey-core/collaboration` is not published yet. Expected layout:
+`package.json` pins the published survey packages (`3.1.1`, which ships
+`survey-core/collaboration`), so `npm install` and `npm run build` need nothing else.
+
+`npm run dev` and `npm test` instead resolve the survey packages from the **sibling
+`survey-library` checkout**, so plugin work there shows up here without a publish
+([`server/src/localSurvey.ts`](server/src/localSurvey.ts)). The server logs which one it
+picked, e.g. `[survey] local survey-library 3.1.0 (<path>)`. Expected layout:
 
 ```
 WebstormProjects/
@@ -89,15 +94,17 @@ WebstormProjects/
   collaborative-form-filling/     (this repo)
 ```
 
-Build the library packages once (from `survey-library`), in dependency order:
+Build the library packages (from `survey-library`), in dependency order:
 
 ```bash
 cd packages/survey-core       && npm run build && npm run build:collaboration
 cd ../survey-react-ui         && npm run build
 cd ../survey-js-ui            && npm run build
 cd ../survey-vue3-ui          && npm run build
-cd ../survey-angular-ui       && npm run build
 ```
+
+Without that build (or with `SURVEY_LIBRARY=npm`) dev falls back to the npm packages.
+Angular is always built from npm: its dist is served as-is in both modes.
 
 Then, here:
 
@@ -126,6 +133,7 @@ npm start
 | `NODE_ENV` | `development` | `production` disables the Vite middleware |
 | `EMPTY_ROOM_TTL_MS` | `2000` | grace period before an empty room is reclaimed |
 | `PRESENCE_PING_MS` | `30000` | WebSocket keepalive interval |
+| `SURVEY_LIBRARY` | `../survey-library` | dev/test only: survey-library checkout to resolve the survey packages from; `npm` uses the npm packages |
 
 ## Tests
 

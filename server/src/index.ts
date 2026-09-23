@@ -10,6 +10,7 @@ import { defaultSurvey } from "./defaultSurvey.js";
 import { RoomStore } from "./roomStore.js";
 import { createHttpRooms } from "./httpRooms.js";
 import { attachRelay } from "./relay.js";
+import { localSurvey } from "./localSurvey.js";
 
 const PORT = Number(process.env.PORT) || 3001;
 const isProd = process.env.NODE_ENV === "production";
@@ -71,13 +72,16 @@ if (isProd) {
   const { createServer: createViteServer } = await import("vite");
   const { default: react } = await import("@vitejs/plugin-react");
   const { default: vue } = await import("@vitejs/plugin-vue");
+  // Dev resolves the survey packages from the sibling survey-library checkout
+  // (see localSurvey.ts); vite build and prod use the npm versions.
+  const survey = localSurvey();
   const pluginsByPrefix: Record<string, () => PluginOption[]> = {
-    react: () => [react()],
-    js: () => [],
-    vue: () => [vue()],
+    react: () => [survey, react()],
+    js: () => [survey],
+    vue: () => [survey, vue()],
   };
-  // In-repo file: deps are junctions into the survey-library fork — their real
-  // paths live outside each app root, so allow the whole parent directory.
+  // The checkout's build lives outside each app root, so allow the whole
+  // parent directory.
   const fsAllow = [path.resolve(repoRoot, "..")];
   // configFile: false is deliberate: loading each app's vite.config.ts writes
   // a compiled temp file into node_modules/.vite-temp, which tsx watch sees
@@ -141,7 +145,7 @@ if (isProd) {
     configFile: false, // see the note on the client middlewares above
     appType: "spa",
     base: "/",
-    plugins: [react()],
+    plugins: [localSurvey(), react()],
     resolve: { dedupe: ["survey-core", "survey-react-ui"] },
     server: {
       middlewareMode: true,

@@ -8,8 +8,8 @@
     "build": "tsc -b && vite build"
   },
   "dependencies": {
-    "survey-core": "file:../../../survey-library/packages/survey-core/build",
-    "survey-js-ui": "file:../../../survey-library/packages/survey-js-ui/build"
+    "survey-core": "3.1.1",
+    "survey-js-ui": "3.1.1"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
