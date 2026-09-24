@@ -8,7 +8,8 @@ import type { Model, Question } from "survey-core";
  * - `storeDataAsText: true` (survey-core's default) — the file is read with
  *   FileReader and its base64 IS the question's value. `onUploadFiles` never
  *   fires, nothing here participates, and the bytes ride the socket and sit in
- *   the room snapshot. The limits in ./sync are what keep that survivable.
+ *   the room snapshot. MAX_FILE_BYTES below and the relay's limits in
+ *   server/src/protocol.ts are what keep that survivable.
  * - `storeDataAsText: false` — survey-core raises `onUploadFiles`, we upload to
  *   our own endpoint and the value holds only `{name, type, content: <url>}`,
  *   a few dozen bytes regardless of file size.

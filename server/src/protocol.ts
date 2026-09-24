@@ -44,11 +44,14 @@ export const PRESENCE_TOKENS_PER_SEC = 50;
 export const PRESENCE_BUCKET_CAPACITY = 100;
 
 /**
- * Ceiling on one answer's serialized form, mirroring the plugin's own guard — keep
- * the two in step. The plugin refuses an oversized value with a message on the
- * question; this copy is what actually enforces it, because a client that does not
- * run that guard (an older build, someone else's client) must not be able to park
- * an oversized answer in a room or have it rebroadcast to everyone.
+ * Ceiling on one answer's serialized form. The plugin sets no limit of its own, so
+ * this is the only one — and nobody is told when it is hit. A `value` frame over
+ * MAX_SET_FRAME_BYTES is dropped in silence: the room does not store it and the peers
+ * never see it, while its author still shows the answer until the next `init`
+ * replaces the state. A frame over MAX_FRAME_BYTES closes the author's socket
+ * (code 1009), and the reconnect's `init` takes the answer away at once. `maxSize`
+ * caps each file, not the value: several files in one question, composite or dynamic
+ * panel add up.
  *
  * Sized for a file question left on survey-core's `storeDataAsText: true`, where
  * the file's bytes ARE the value: 10 MiB of file becomes ~13.4 MiB of base64 (x4/3)
