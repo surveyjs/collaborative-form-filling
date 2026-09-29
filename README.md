@@ -80,7 +80,7 @@ stays here &mdash; every client calls `attachFileSync` alongside the plugin.
 
 ## Setup
 
-`package.json` pins the published survey packages (`3.1.1`, which ships
+`package.json` pins the published survey packages (`3.1.2`, which ships
 `survey-core/collaboration`), so `npm install` and `npm run build` need nothing else.
 
 `npm run dev` and `npm test` instead resolve the survey packages from the **sibling

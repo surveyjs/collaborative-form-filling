@@ -8,8 +8,8 @@
     "build": "tsc -b && vite build"
   },
   "dependencies": {
-    "survey-core": "3.1.1",
-    "survey-js-ui": "3.1.1"
+    "survey-core": "3.1.2",
+    "survey-js-ui": "3.1.2"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
