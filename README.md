@@ -1,139 +1,138 @@
 # Collaborative Form Filling by SurveyJS
 
-A real-time collaborative survey and form filling service that allows multiple participants to complete the same form simultaneously (similar to Google Docs for document editing).
+This app lets several people fill out the same [SurveyJS](https://surveyjs.io/) form together. Answers and uploaded files are shared in real time. Participants can use clients built with React, plain JavaScript, Vue, or Angular to work in the same room.
 
-## Features
+[Open the Online Demo](https://collaborative-form-filling.demos.surveyjs.io/)
 
-- **Shared answers** &ndash; every answer appears for all participants as it is entered.
-- **Participants bar** &ndash; who is in the room, plus an **Invite** button that copies a join link.
-- **Presence** &ndash; see which question each participant is in (a colored ring with their name) and where their mouse cursor is. Click an avatar to jump to that participant.
-- **Change history** &ndash; the **Changes** button shows who changed which question and to what, and takes you to that question in one click.
-- **File uploads** &ndash; files uploaded in one browser become available to everyone in the room.
-- **Any framework** &ndash; React, Plain JS, Vue 3 and Angular clients; participants on different frameworks can share one room.
-- **Custom forms** &ndash; paste your own [SurveyJS](https://surveyjs.io/) JSON schema in the lobby.
+## Try It Locally
 
-## Quick Start
+Install the dependencies, build the clients, and start the server:
 
 ```bash
 npm install
-npm run build:angular     # once: the Angular client is served from this build
+npm run build
 npm run dev
 ```
 
-Open [`http://localhost:3001`](http://localhost:3001) in two browser tabs, enter a name, pick a framework and join the same room id in both. The first startup may take longer while Vite optimizes dependencies.
+Open [localhost:3001](http://localhost:3001). In the lobby, enter your name, choose a framework, and enter a room ID. Use the sample form or paste a SurveyJS JSON schema to create a room with your own form.
+
+![Collaborative Form Filling with SurveyJS - Lobby page](./.github/assets/collaborative-survey-lobby.png)
+
+Once you join, click **Invite** to copy a link for another participant. To try collaboration on your own, open the link in a second browser tab.
+
+![Collaborative Form Filling with SurveyJS - Copy invite link](./.github/assets/collaborative-survey-invite-link.png)
+
+As participants fill out the form, everyone can see their answers, which questions they are working on, and where their cursors are. Click a participant's avatar to jump to their question. Open **Changes** to review edits and jump to the affected questions.
+
+![Collaborative Form Filling with SurveyJS - Change history](./.github/assets/collaborative-survey-change-history.png)
 
 ## How It Works
 
-- The **lobby** at `/` collects a display name, a framework, a room id and an optional custom schema, then opens the form in the chosen client.
-- The **server** keeps the answers of each room and sends every change to the other participants. It knows nothing about SurveyJS; [`PROTOCOL.md`](PROTOCOL.md) describes it for anyone who wants to implement it in another language.
-- If two people change the same question at the same moment, the last change wins.
-- All collaboration features come from the `CollaborationPlugin` of `survey-core`. The clients themselves contain no collaboration UI.
+- Each client creates a SurveyJS form and attaches `CollaborationPlugin` from `survey-core`. The plugin provides the participants bar, presence indicators, and change history. See the [React client](clients/react/src/App.tsx) for an example.
+- The shared [connection helper](shared/collab-client.ts) sends plugin messages over WebSocket, passes incoming messages to the plugin, and reconnects if the connection drops.
+- [File handling](shared/fileSync.ts) uploads files separately so that their links can be shared as answers.
+- The server stores each room's answers and forwards changes to its participants. If two people edit the same answer, the last change received wins.
+- The server does not depend on SurveyJS. [PROTOCOL.md](PROTOCOL.md) describes how to implement a compatible server.
 
-## Using the Plugin
+### Limitations
 
-The plugin works with any `SurveyModel` and any transport. It gives you messages to send and accepts messages you receive:
+- Rooms are stored in memory and deleted shortly after everyone leaves. Restarting the server also clears them.
+- Edits made while offline are lost when the connection is restored.
+- Change history covers only the current connection.
+- There is no authentication.
+
+## Use the Collaboration Plugin
+
+To use `CollaborationPlugin`, import it from `survey-core/collaboration`, create a survey model, and attach the plugin. In this example, `surveyJson` is your form definition, `roomId` identifies the shared room, and `inviteUrl` is its join link:
 
 ```ts
 import { Model } from "survey-core";
 import { CollaborationPlugin } from "survey-core/collaboration";
+import "survey-core/survey-core.css";
 import "survey-core/collaboration.css";
 
-const survey = new Model(json);
+const survey = new Model(surveyJson);
 const collab = new CollaborationPlugin(survey, {
   info: [{ label: "Room", value: roomId }],
   getInviteLink: () => inviteUrl,
 });
 
-collab.onEvent.add((_, o) => ws.send(JSON.stringify(o.message)));
-ws.onmessage = (e) => collab.apply(JSON.parse(e.data));
+// Forward plugin events through your WebSocket connection.
+collab.onEvent.add((_, { message }) => {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(message));
+  }
+});
+
+// Apply messages from the server, including the initial room state.
+ws.onmessage = (event) => collab.apply(JSON.parse(event.data));
 ```
 
-In this repository that wiring, together with reconnects, is done by `connectCollab` from [`shared/collab-client.ts`](shared/collab-client.ts); see any client entry, e.g. [`clients/react/src/App.tsx`](clients/react/src/App.tsx).
+Here, `ws` is a WebSocket connected to a server that follows the [collaboration protocol](PROTOCOL.md). Attach the message handler before the server sends the initial room state, then render `survey` with your framework's SurveyJS component.
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `info` | &ndash; | Label/value pairs shown in the participants bar, e.g. the room id |
-| `getInviteLink` | &ndash; | Returns the link the **Invite** button copies; without it there is no button |
-| `maxVisibleParticipants` | `8` | Avatars shown before the rest collapse into `+N` |
-| `bar` | `true` | Set to `false` to hide the participants bar |
-| `presence` | `true` | Set to `false` to hide participants' focus and cursors |
-| `history` | `true` | Set to `false` to turn off the change history |
-| `historyLimit` | `200` | How many changes the history keeps |
+When you remove the form, call `collab.dispose()` and close the connection. In this app, [`connectCollab`](shared/collab-client.ts) handles message forwarding, reconnection, and cleanup. The [React client](clients/react/src/App.tsx) shows how to use it.
 
-Call `collab.dispose()` when the form is removed from the page.
+## Development
 
-The plugin does not upload files itself: the application stores them and the plugin shares the resulting answer. Here that is [`shared/fileSync.ts`](shared/fileSync.ts).
+### Work on the Collaboration Plugin
 
-## Working on the Plugin
-
-The plugin lives in [survey-library](https://github.com/surveyjs/survey-library). `npm run dev` and `npm test` use a build of a sibling checkout when there is one, so changes there show up here without publishing:
-
-```
-WebstormProjects/
-  survey-library/                 (branch: master)
-  collaborative-form-filling/     (this repo)
-```
-
-Build it from `survey-library`:
+The plugin source is in [`survey-library`](https://github.com/surveyjs/survey-library). To work on it locally, place a checkout next to this repository and build its packages. Run these commands from the `survey-library` directory:
 
 ```bash
-cd packages/survey-core       && npm run build && npm run build:collaboration
-cd ../survey-react-ui         && npm run build
-cd ../survey-js-ui            && npm run build
-cd ../survey-vue3-ui          && npm run build
+cd packages/survey-core
+npm run build
+npm run build:collaboration
+cd ../survey-react-ui
+npm run build
+cd ../survey-js-ui
+npm run build
+cd ../survey-vue3-ui
+npm run build
 ```
 
-The server log says which packages are in use. Without the build, or with `SURVEY_LIBRARY=npm`, the published npm packages are used. The Angular client always uses the npm packages.
+In this repository, `npm run dev` and `npm test` use the local builds when available. Set `SURVEY_LIBRARY` to the path of a different checkout, or to `npm` to use the published packages. The server log shows which packages are in use.
 
-> The published `3.1.2` packages still contain the previous version of the plugin; the version described here comes with the next release.
+Production builds and clients always use npm packages.
 
-## Production
+The development server serves the clients' built files, so run `npm run build` after changing a client.
+
+### Run Tests
+
+Run the server and client unit tests:
+
+```bash
+npm test
+```
+
+For browser tests, install Playwright browsers once and build the clients before running the suite:
+
+```bash
+npm run test:e2e:install
+npm run build
+npm run test:e2e
+```
+
+The plugin's own tests are in `../survey-library/packages/survey-core/tests/collaboration/`.
+
+## Build and Run
+
+Build all clients and the server, then start the production server:
 
 ```bash
 npm run build
 npm start
 ```
 
-## Environment
+The server uses port `3001` by default. Set these environment variables to adjust its behavior:
 
-| Variable | Default | Meaning |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `3001` | HTTP + WebSocket port |
-| `NODE_ENV` | `development` | `production` disables the Vite middleware |
-| `EMPTY_ROOM_TTL_MS` | `2000` | grace period before an empty room is reclaimed |
-| `PRESENCE_PING_MS` | `30000` | WebSocket keepalive interval |
-| `SURVEY_LIBRARY` | `../survey-library` | dev/test only: survey-library checkout to take the survey packages from; `npm` uses the npm packages |
-
-## Tests
-
-```bash
-npm test                  # unit tests: server and clients
-npm run test:e2e:install  # once: installs Playwright browsers
-npm run test:e2e          # end-to-end tests in real browsers; requires npm run build:angular
-```
-
-The plugin's own tests are in `../survey-library/packages/survey-core/tests/collaboration/`.
-
-## Project Structure
-
-- [`PROTOCOL.md`](PROTOCOL.md) &ndash; the server specification.
-- [`server/src/`](server/src/) &ndash; the server: [`relay.ts`](server/src/relay.ts) (WebSocket), [`roomStore.ts`](server/src/roomStore.ts) (rooms), [`protocol.ts`](server/src/protocol.ts) (message types and limits), [`index.ts`](server/src/index.ts) (HTTP and app hosting).
-- [`shared/collab-client.ts`](shared/collab-client.ts) &ndash; the WebSocket connection shared by all four clients.
-- [`shared/fileSync.ts`](shared/fileSync.ts), [`shared/customComponents.ts`](shared/customComponents.ts) &ndash; file uploads and custom question types.
-- [`lobby/`](lobby/), [`clients/react/`](clients/react/), [`clients/js/`](clients/js/), [`clients/vue/`](clients/vue/), [`clients/angular/`](clients/angular/) &ndash; the apps.
-
-## Limitations
-
-This is an MVP:
-
-- Rooms live in memory; a server restart loses them.
-- There is no authentication.
-- Changes made while offline are lost when the connection comes back.
-- The change history covers the current connection only.
+| `PORT` | `3001` | HTTP and WebSocket port |
+| `EMPTY_ROOM_TTL_MS` | `2000` | Delay before deleting an empty room, in milliseconds |
+| `PRESENCE_PING_MS` | `30000` | WebSocket keepalive interval, in milliseconds |
 
 ## Related Resources
 
 - [SurveyJS Website](https://surveyjs.io/)
 - [SurveyJS Documentation](https://surveyjs.io/documentation)
-- [SurveyJS Form Library Demos](https://surveyjs.io/form-library/examples/overview)
 - [What's New in SurveyJS](https://surveyjs.io/WhatsNew)

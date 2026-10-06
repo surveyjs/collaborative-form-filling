@@ -1,253 +1,148 @@
 # Collaborative Form Filling Protocol
 
-A language-agnostic specification of the server side. The Node server in
-[`server/src`](server/src) is a *reference implementation*: it has no SurveyJS
-dependency and is meant to be straightforward to port to Go, .NET, Java or Python.
+This document describes the server protocol used by the SurveyJS collaboration plugin. The [Node.js server](server/src) is a reference implementation with no SurveyJS dependency and can be ported to other languages.
 
-## Core idea
+## Room State
 
-Clients run SurveyJS with the collaboration plugin from `survey-core/collaboration`.
-The plugin turns every local answer change into a small `{ key, value }` message and
-applies incoming ones. All convergence lives in the clients: last write wins per key.
+Each room holds a form definition (`seed`), the latest answer for each key (`values`), and its connected clients. The server sends this snapshot to new participants, then stores and forwards answer changes as they arrive.
 
-A room is:
+The server treats the form definition, answer keys, and values as data it does not interpret. It uses each key only to store and retrieve a value; it does not match keys against the form definition. For each key, the last value received replaces the previous one.
 
-```
-room = { id, seed, values, clients }
-```
+## Create or Find a Room
 
-- `seed` — the survey schema. **Opaque**: never parsed, validated or executed.
-- `values` — `key → last value`. Both **opaque**; `key` is used only as a map key.
-- `clients` — the connected WebSockets, each with a server-assigned id.
+Clients choose a room ID and can create a room through HTTP before connecting. The server assigns a separate client ID to each WebSocket connection.
 
-The server's whole job is: hand a newcomer the seed, the values and the roster; store
-and fan out each answer change; relay presence; reclaim rooms nobody is in.
+| Identifier | Rules |
+| --- | --- |
+| Room ID | Must match `^[A-Za-z0-9_-]{1,64}$`. Invalid IDs receive HTTP `400` or a refused WebSocket upgrade. |
+| Client ID | Assigned by the server for each connection. Reconnecting creates a new ID. |
+| Display name | Read from `?name=`, trimmed, and limited to 32 Unicode code points. Empty names become `Anonymous`. |
 
-**Why a snapshot map rather than an append-only log.** The collaborative state of a
-form filling session already *is* a flat key → value map with last-write-wins per key,
-so a log adds no convergence power: replaying `[{a,1},{a,2}]` and storing `{a:2}` are
-the same thing. A log would instead grow without bound during a session and make a
-late joiner `O(edits)` rather than `O(questions)`.
+The HTTP API lets clients check whether a room exists or create one with a custom form:
 
-**The one thing the server knows about a key** is that it is a string it can use as a
-map key. It never splits it, never matches it against a schema, never interprets the
-value. (The plugin encodes a question's comment into the same key space; that encoding
-is a client-side convention the server is unaware of.)
-
-## Forward compatibility
-
-Both sides **MUST** ignore, in silence:
-
-- a message whose `type` they do not know, and
-- fields they do not know inside a message they do.
-
-This is a contract, not advice. It is what lets a client forward frames straight into
-the plugin and out of it without an adapter, and what lets the vocabulary grow without
-rewiring every application. The server already relies on it: it adds `from` to a
-relayed `value`, and `init` carries several fields only the host reads.
-
-## Identifiers
-
-- **Room id** — chosen by clients, `^[A-Za-z0-9_-]{1,64}$`. Anything else is rejected
-  with HTTP 400 or a refused WebSocket upgrade. It admits neither `.` nor `/`, which
-  is what also makes it safe as a path segment for the file store.
-- **Client id** — assigned by the server per connection (the reference uses a UUID).
-  A reconnect is a *new* client id, not a resumed session.
-- **Display name** — from `?name=`, trimmed, at most 32 **code points** (never cut
-  mid-surrogate), empty becomes `Anonymous`.
-
-## HTTP API
-
-| Method | Path | Result |
+| Method | Path | Response |
 | --- | --- | --- |
 | `GET` | `/health` | `200 {"ok":true}` |
-| `GET` | `/api/rooms/{id}` | `200 {roomId, exists:true, participantCount}` · `404 {exists:false}` · `400` |
-| `POST` | `/api/rooms` | `201 {roomId}` · `409` (exists; its seed is **not** touched) · `400` |
+| `GET` | `/api/rooms/{id}` | `200 {roomId, exists:true, participantCount}`, `404 {exists:false}`, or `400` for an invalid ID |
+| `POST` | `/api/rooms` | `201 {roomId}`, `409` if the room exists, or `400` for an invalid request |
 
-`POST` body is `{ roomId, surveyJson? }`. The only check on `surveyJson` is that it is
-a plain object; without it the room gets the server's configured default. A room's seed
-is fixed at creation — that is why `409` is a normal outcome and clients treat it as
-"someone created it first, just join".
+To create a room, send `{ roomId, surveyJson? }`. If provided, `surveyJson` must be a plain object; the server does not validate its contents. Otherwise, the server uses its default form definition.
 
-## WebSocket
+A room's form definition is fixed at creation. A `409` response leaves the existing definition unchanged, and the client can join that room.
 
-`ws(s)://host/ws/rooms/{roomId}?name={displayName}`
+## Connect and Exchange Messages
 
-One connection is one participant in one room. A room that does not exist is created
-on connect, so a pasted deep link works. Every message is a single JSON object.
+Connect to `ws(s)://host/ws/rooms/{roomId}?name={displayName}`. Each connection represents one participant in one room. If the room does not exist, the server creates it with the default form definition.
 
-**The message names are deliberately the vocabulary the collaboration plugin speaks**,
-so a client forwards frames in both directions without translating them.
+Each message is a JSON object. Message types match the collaboration plugin's API, so clients can forward messages without translating them. Both sides must silently ignore unknown message types and unknown fields within known messages.
 
-### Server → client
+### Initial State
 
-```jsonc
-// once, first, and again on every reconnect
-{ "type": "init",
-  "clientId": "3f2c…", "name": "Ann", "colorIndex": 1,
-  "seed":   { /* survey schema, opaque */ },
+The server sends `init` first on every connection, including reconnects:
+
+```json
+{
+  "type": "init",
+  "clientId": "client-1",
+  "name": "Ann",
+  "colorIndex": 1,
+  "seed": {},
   "values": { "q1": "answer" },
-  "peers":  [ { "clientId": "…", "name": "Bob", "colorIndex": 2, "state": { } } ] }
-
-{ "type": "value", "from": "3f2c…", "key": "q1", "value": 42 }   // to everyone but the author
-{ "type": "peer",  "peer": { "clientId": "…", "name": "…", "colorIndex": 2, "state": { } }, "retain": true }
-{ "type": "peer-left", "clientId": "3f2c…" }
+  "peers": [
+    { "clientId": "client-2", "name": "Bob", "colorIndex": 2, "state": {} }
+  ]
+}
 ```
 
-`init` is **one** frame rather than three (identity, then state, then roster) so that a
-peer's edit cannot land between them and be erased by a state that does not contain it
-yet. `seed` and the identity triple `clientId`/`name`/`colorIndex` are for the host; the
-plugin reads `values` and `peers` and ignores the rest.
+This message combines the client's identity, form definition, current answers, and peer roster. Send it as one message before any answer or presence updates, so an update cannot arrive before the snapshot and then be overwritten by it.
 
-`from` on a relayed `value` is **attribution, not routing**. It takes no part in
-convergence - last write wins per key, whoever wrote it - and the server never stores
-it: `values` is a key -> value map with no authors in it. A client uses it to keep the
-session history below. A server that omits it stays interoperable; those edits then
-read as coming from someone unknown.
+### Answer Changes
 
-### Client → server
+When an answer changes, the client sends:
 
-```jsonc
+```json
 { "type": "value", "key": "q1", "value": 42 }
-{ "type": "presence", "state": { /* opaque */ }, "retain": true }
 ```
 
-The server stores the value under the key (replacing whatever was there) and relays it
-to everyone else. It never echoes a message back to its author.
+The server replaces the stored value for that key and forwards the change to every other participant:
 
-### Guards
+```json
+{ "type": "value", "from": "client-1", "key": "q1", "value": 42 }
+```
 
-| Guard | Value | Why |
+Process each room's messages sequentially and forward changes in the order they are stored. Never echo a message to its sender.
+
+The server adds `from` to identify the author for client-side change history. It does not store authorship with the answer or use it to resolve conflicts. If `from` is omitted, clients can still apply the change but cannot identify its author.
+
+Change history is optional and stays on the client. It starts empty and is cleared by each `init`, so it covers only edits seen during the current connection. The server keeps the latest values, not an edit log.
+
+### Presence
+
+Presence is optional. A server can omit it and still support shared answers. A client sends its full presence state, not a partial update:
+
+```json
+{ "type": "presence", "state": {}, "retain": true }
+```
+
+The server does not interpret `state`. It adds the participant's identity and forwards a `peer` message to the other clients:
+
+```json
+{
+  "type": "peer",
+  "peer": { "clientId": "client-1", "name": "Ann", "colorIndex": 1, "state": {} },
+  "retain": true
+}
+```
+
+The `retain` field defaults to `true`. It controls whether the server keeps the presence state for new participants and whether it can skip delivery to a client with a congested send buffer:
+
+| Behavior | `retain: true` | `retain: false` |
 | --- | --- | --- |
-| frame size, checked **before** `JSON.parse` | 17 MiB | a 20 MiB parse is itself the attack |
-| `ws` `maxPayload` | 20 MiB | anything larger closes the socket (code 1009) |
-| presence frame | 4096 bytes | presence is small by construction |
-| presence rate | 50/s, burst 100 | a token bucket per client |
+| Typical content | Current page and focused question | Page, focused question, and cursor path |
+| Included in later `init` messages | Yes | No |
+| May be dropped when the send buffer is congested | No | Yes |
 
-The size limits form one chain whose order must hold, and a test asserts it numerically:
+Presence is separate from answer data and lasts only while the participant is connected. When that participant leaves, the server removes their presence and notifies the others:
 
-```
-MAX_FILE_BYTES × 4/3  <  MAX_VALUE_CHARS  <  MAX_FRAME_BYTES
-      13.4 MiB        <      16 MiB       <      20 MiB
+```json
+{ "type": "peer-left", "clientId": "client-1" }
 ```
 
-The left-hand term is a file question left on survey-core's `storeDataAsText: true`,
-where the file's own base64 *is* the answer.
+For participant colors, the server assigns the lowest available slot and reuses slots when participants leave. It sends `colorIndex` in the range `1..9`, wrapping larger slot numbers into that range. Slot `0` is reserved for unknown users.
 
-## Presence
+Clients use their theme to turn this index into a color. If no index is provided, they derive one by hashing `clientId` into the same range.
 
-An optional extension. A server that does not implement it interoperates unchanged —
-its frames simply never arrive, and unknown types are ignored anyway.
+## Disconnect and Reconnect
 
-- **Ephemeral.** Presence never becomes part of the room state.
-- **Opaque.** The state is produced and consumed by the plugin; the server does not
-  look inside it.
-- **Identity lives in the envelope, not the state.** The server stamps `clientId`,
-  `name` and `colorIndex` onto every relayed entry. That is what keeps the state
-  portable and makes a reconnect self-healing.
-- **Colours are a slot number, never a colour.** The server assigns the lowest slot
-  not held by another client in the room — stable and collision-free per room, and a
-  leaver's slot is reusable — but it never resolves that slot to a colour. The palette
-  belongs to the client theme (survey-core's `--sjs2-color-utility-user-bg-color-N`
-  and its paired `-fg-on-color-N`), which is the only thing that knows whether the
-  page is light or dark and what stays legible on it.
+The server pings each socket every 30 seconds and terminates connections that do not respond. A terminated connection produces the same `peer-left` message as a normal close. Browsers answer these pings at the WebSocket layer, so clients do not need a separate timer to detect inactive peers.
 
-  A server that stamped a hex would be a second palette indexed by the same number, and
-  the same person would come out one colour on their avatar and another on their focus
-  ring. **Slot 0 is reserved** for an unknown user, so participants get `1..9`; a
-  client that receives no `colorIndex` derives one by hashing `clientId` into the same
-  range.
-- **Full state, never diffs.** Any single frame fully re-establishes a participant.
+A reconnect creates a new client identity and assigns a color slot again. The new `init` replaces all local answers, including removing keys absent from the snapshot. Edits made while disconnected are lost.
 
-`retain` (default `true`) decides two things:
+When the last participant leaves, the server starts a grace period controlled by `EMPTY_ROOM_TTL_MS` (default: 2000 milliseconds). If nobody reconnects before it expires, the server deletes the room and its files. This delay preserves the room during brief connection drops.
 
-| | `retain: true` | `retain: false` |
+## Message Limits
+
+The reference server applies these limits before processing messages:
+
+| Limit | Value | Behavior |
 | --- | --- | --- |
-| carries | page, focused question | the above plus the mouse cursor path |
-| stored by the server | yes — replayed in the next `init` | no |
-| may be dropped | never | yes, for a peer whose send buffer is congested |
+| Message size before JSON parsing | 17 MiB | Drop larger messages without parsing them |
+| WebSocket payload size | 20 MiB | Close the connection with code `1009` if exceeded |
+| Presence message size | 4096 bytes | Drop larger presence messages |
+| Presence rate per client | 50 per second, burst of 100 | Use a token bucket and drop messages when no tokens remain |
 
-The droppable half is the hand-rolled equivalent of socket.io's `volatile`, which raw
-WebSocket does not provide. Losing a cursor frame is invisible: every packet is a
-self-contained path segment and the receiver replays it ~100 ms behind, interpolating.
+The 17 MiB message limit leaves room for a 16 MiB serialized answer and its message fields. This supports file questions that store file contents as Base64 answers: a 10 MiB file expands to about 13.4 MiB. Allow for this expansion when adjusting the limits.
 
-**Colours** come from a fixed palette: the lowest slot not held by another client in
-the room, wrapping with modulo. A leaver's slot is reusable. The client's own colour
-arrives in `init`; peers' colours ride every envelope, so no client needs the palette.
+## File Storage Extension
 
-## Room lifecycle
+File uploads are a demo extension, separate from the collaboration protocol. The app connects SurveyJS's `onUploadFiles` and `onClearFiles` events to these endpoints:
 
-Created by `POST /api/rooms` or on first connect. When the last client leaves, a
-**grace period** starts (`EMPTY_ROOM_TTL_MS`, default 2000 ms); if nobody reconnects
-before it elapses, the room and its stored files are deleted.
+| Method | Path | Response |
+| --- | --- | --- |
+| `POST` | `/api/rooms/{id}/files?name={fileName}` | `201 {url}`; `404` if the room does not exist; `413` if a size limit is exceeded |
+| `GET` | `/api/rooms/{id}/files/{fileId}` | Stored file |
+| `DELETE` | `/api/rooms/{id}/files/{fileId}` | `200 {ok:true}` |
 
-The grace is not decoration. A room has to survive its last socket blipping — a
-reconnect, a development-mode double mount, a 200 ms network drop. Pruning on the spot
-loses the schema the creator registered, and the next connect silently re-creates the
-room with the default survey.
+Uploads use a raw request body, with a limit of 10 MiB per file and 50 MiB per room. An upload does not create a room, and files are deleted with their room.
 
-## Ordering and consistency
-
-1. **Per-room total order.** All clients observe values in the order the server stored
-   them. Handle a room's messages sequentially.
-2. **Nothing before `init`.** A client receives no `value` or `peer` frame before its
-   own `init`. Registering the client and sending `init` in the same synchronous step
-   gives this for free. State and roster need no separate guarantee — they are inside
-   `init`.
-3. **No echo.** Never send a client its own message back.
-
-Nothing else is required: conflict resolution is entirely client-side.
-
-## Change history
-
-Optional, and entirely a **client** concern: nothing of it is on the wire beyond `from`.
-
-The collaboration plugin keeps an in-memory log of the edits it has witnessed - author,
-question, a short description of the value - for the lifetime of one connection, and
-shows it in the strip above the form. The scope is deliberately that narrow:
-
-- **The server has no history.** It keeps a snapshot map, which is what makes a late
-  joiner `O(questions)` rather than `O(edits)`; a log would grow without bound.
-- **`init.values` carries no authorship**, so whatever happened before this client
-  connected is anonymous - the log starts empty.
-- **Every `init` clears it.** A reconnect replaces the local state wholesale, so
-  entries recorded before it describe a state that is no longer there.
-
-A durable, cross-session audit trail is a different feature: it needs storage on the
-server, a retention policy, and a way to read it back.
-
-## Keepalive and reconnect
-
-The server pings each socket every 30 s and terminates one that does not answer, which
-produces the same `peer-left` a clean close would. A browser answers pings at the
-WebSocket layer even in a throttled background tab, so clients do **not** run their own
-staleness sweep — a JS-timer sweep would wrongly drop an idle observer.
-
-The server does not resume sessions: a reconnect gets a new client id and a new colour.
-The `init` that follows is **authoritative** — it replaces the local values, including
-erasing keys it does not carry. **Edits made while disconnected are lost.** That is a
-deliberate choice, not an oversight: an outbox would need a merge policy for the case
-where the same question changed on both sides.
-
-## File storage (a demo extension, outside the relay protocol)
-
-| Method | Path |
-| --- | --- |
-| `POST` | `/api/rooms/{id}/files?name={fileName}` — raw body, ≤ 10 MiB, `404` if the room does not exist, `413` over the 50 MiB per-room budget → `201 {url}` |
-| `GET` | `/api/rooms/{id}/files/{fileId}` |
-| `DELETE` | `/api/rooms/{id}/files/{fileId}` → `200 {ok:true}` |
-
-An upload deliberately does **not** create the room: a room nobody joined would have
-nobody to clean it up. Served files carry `X-Content-Type-Options: nosniff` and
-`Content-Security-Policy: default-src 'none'`, and only png/jpeg/gif/webp/bmp are
-served inline — **`image/svg+xml` is excluded on purpose**, because an inline SVG is
-same-origin script. Blobs die with the room.
-
-This is not part of the collaboration protocol and does not involve the plugin: it is
-survey-core's own `onUploadFiles`/`onClearFiles` pointed at an endpoint of this app.
-
-## Static serving (optional)
-
-The reference server also hosts the lobby at `/` and the built clients at `/react/`,
-`/js/`, `/vue/` and `/angular/`. A production server may host the UI anywhere; only
-`/api/*` and `/ws/*` are the protocol surface.
+Served files include `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'`. Only PNG, JPEG, GIF, WebP, and BMP files are served inline; SVG files are excluded because they can execute scripts.
